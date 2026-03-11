@@ -1,0 +1,10 @@
+services:
+  teaching-studio:
+    build:
+      context: .
+      dockerfile: apps/teaching-studio/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PORT: 3000

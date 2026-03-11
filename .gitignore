@@ -64,13 +64,30 @@ venv/
 .nox/
 htmlcov/
 .coverage
-
+.cache
+.hypothesis/
+.pyre/
+.pytype/
+.pdm-python
+.pixi
+__pypackages__/
 .langgraph_api
+
+# notebooks / local tooling
+.ipynb_checkpoints
+instance/
 
 # Cursor
 .cursor
+.cursorignore
+.cursorindexingignore
 
-# GitHub Spec Kit - https://github.com/github/spec-kit
+# GitHub Spec Kit
 .specify/
 specs/*
 .test-output/
+
+# marimo
+marimo/_static/
+marimo/_lsp/
+__marimo__/

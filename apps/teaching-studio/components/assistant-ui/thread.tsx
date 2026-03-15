@@ -1,6 +1,6 @@
 "use client";
 
-import type { FC } from "react";
+import { useCallback, useState, type FC } from "react";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -8,6 +8,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
+  GripHorizontalIcon,
   MicIcon,
   PencilIcon,
   RefreshCwIcon,
@@ -35,11 +36,43 @@ import {
   ThreadPrimitive,
 } from "@assistant-ui/react";
 
+const MIN_CONTEXT_GAP = 4;
+const MAX_CONTEXT_GAP = 220;
+const DEFAULT_CONTEXT_GAP = 40;
+
 export const Thread: FC = () => {
+  const [contextGap, setContextGap] = useState(DEFAULT_CONTEXT_GAP);
+
+  const handleResizeContextGap = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+
+      const startY = event.clientY;
+      const startGap = contextGap;
+
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        const nextGap = Math.min(
+          MAX_CONTEXT_GAP,
+          Math.max(MIN_CONTEXT_GAP, startGap + moveEvent.clientY - startY),
+        );
+        setContextGap(nextGap);
+      };
+
+      const onPointerUp = () => {
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+    },
+    [contextGap],
+  );
+
   return (
     <ThreadPrimitive.Root
       className="flex h-full flex-col bg-transparent"
-      style={{ ["--thread-max-width" as string]: "48rem" }}
+      style={{ ["--thread-max-width" as string]: "100%" }}
     >
       <ThreadPrimitive.Viewport className="relative flex flex-1 flex-col overflow-y-auto px-4 pt-4">
         <ThreadPrimitive.If empty>
@@ -54,7 +87,20 @@ export const Thread: FC = () => {
           }}
         />
 
-        <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mx-auto mt-auto flex w-full max-w-(--thread-max-width) flex-col gap-3 bg-linear-to-b from-transparent via-background/96 to-background pt-10 pb-4">
+        <ThreadPrimitive.ViewportFooter
+          className="sticky bottom-0 mx-auto mt-auto flex w-full max-w-(--thread-max-width) flex-col gap-2 bg-linear-to-b from-transparent via-background/96 to-background pb-4"
+          style={{ paddingTop: contextGap }}
+        >
+          <div className="flex items-center justify-center py-1">
+            <button
+              type="button"
+              onPointerDown={handleResizeContextGap}
+              className="inline-flex h-5 w-14 cursor-row-resize items-center justify-center rounded-full border border-border/70 bg-background/85 text-muted-foreground transition-colors hover:text-foreground"
+              aria-label="上下拖拽调整上下文区域"
+            >
+              <GripHorizontalIcon className="size-3.5" />
+            </button>
+          </div>
           <ThreadScrollToBottom />
           <Composer />
         </ThreadPrimitive.ViewportFooter>
@@ -65,7 +111,7 @@ export const Thread: FC = () => {
 
 const ThreadWelcome: FC = () => {
   return (
-    <div className="mx-auto my-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col justify-center px-2 pb-8">
+    <div className="mx-auto flex h-full w-full max-w-(--thread-max-width) flex-1 flex-col justify-between px-2 pt-2 pb-2">
       <div className="inline-flex w-fit items-center gap-2 rounded-full border border-amber-300/60 bg-amber-50 px-3 py-1 text-amber-900 text-xs">
         <WandSparklesIcon className="size-3.5" />
         先澄清需求，再生成内容

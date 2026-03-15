@@ -1,19 +1,32 @@
-import { useState, type FC } from "react";
+"use client";
+
+import { useEffect, useRef, useState, type FC } from "react";
 import {
   ArchiveIcon,
+  CheckIcon,
   LoaderCircle,
   MoreHorizontalIcon,
+  PencilIcon,
   PlusIcon,
+  XIcon,
 } from "lucide-react";
-import { useThreadList, useThreadRuntime } from "@assistant-ui/react";
+import {
+  useAssistantRuntime,
+  useAuiState,
+  useThreadList,
+  useThreadRuntime,
+} from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import { useStudioStore } from "@/lib/studio-store";
 import {
   ThreadListItemMorePrimitive,
   ThreadListItemPrimitive,
   ThreadListPrimitive,
 } from "@assistant-ui/react";
+
+const UNTITLED_TASK = "未命名任务";
 
 export const ThreadList: FC = () => {
   const isLoading = useThreadList((state) => state.isLoading);
@@ -30,6 +43,7 @@ export const ThreadList: FC = () => {
 };
 
 const ThreadListNew: FC = () => {
+  const assistantRuntime = useAssistantRuntime();
   const threadRuntime = useThreadRuntime();
   const resetWorkspace = useStudioStore((state) => state.resetWorkspace);
   const [isResetting, setIsResetting] = useState(false);
@@ -42,8 +56,7 @@ const ThreadListNew: FC = () => {
         threadRuntime.cancelRun();
       }
 
-      threadRuntime.reset();
-      await threadRuntime.composer.reset();
+      await assistantRuntime.switchToNewThread();
       resetWorkspace();
     } finally {
       setIsResetting(false);
@@ -86,17 +99,120 @@ const ThreadListSkeleton: FC = () => {
 };
 
 const ThreadListItem: FC = () => {
+  const assistantRuntime = useAssistantRuntime();
+  const threadId = useAuiState((state: any) => state.threadListItem.id);
+  const title = useAuiState((state: any) => state.threadListItem.title);
+
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isRenaming) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [isRenaming]);
+
+  const handleStartRename = () => {
+    setDraftTitle(typeof title === "string" && title.trim() ? title : "");
+    setIsRenaming(true);
+  };
+
+  const handleCancelRename = () => {
+    setDraftTitle("");
+    setIsRenaming(false);
+  };
+
+  const handleCommitRename = async () => {
+    if (isSaving) return;
+
+    const nextTitle = draftTitle.trim();
+    const currentTitle = (title ?? "").trim();
+
+    if (!nextTitle || nextTitle === currentTitle) {
+      handleCancelRename();
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const runtime = assistantRuntime as any;
+      if (runtime?.threads?.rename) {
+        await runtime.threads.rename(threadId, nextTitle);
+      } else if (runtime?.rename) {
+        await runtime.rename(threadId, nextTitle);
+      }
+    } catch (error) {
+      console.error("Rename thread failed:", error);
+    } finally {
+      setIsSaving(false);
+      setIsRenaming(false);
+    }
+  };
+
   return (
     <ThreadListItemPrimitive.Root className="group flex h-10 items-center gap-2 rounded-2xl transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none data-active:bg-muted">
-      <ThreadListItemPrimitive.Trigger className="flex h-full min-w-0 flex-1 items-center truncate px-3 text-start text-sm">
-        <ThreadListItemPrimitive.Title fallback="未命名任务" />
-      </ThreadListItemPrimitive.Trigger>
-      <ThreadListItemMore />
+      {isRenaming ? (
+        <div className="flex h-full min-w-0 flex-1 items-center gap-1 pl-3">
+          <input
+            ref={inputRef}
+            value={draftTitle}
+            onChange={(event) => setDraftTitle(event.target.value)}
+            onBlur={() => void handleCommitRename()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void handleCommitRename();
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                handleCancelRename();
+              }
+            }}
+            className="h-7 min-w-0 flex-1 rounded-md border border-border/70 bg-background px-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            placeholder={UNTITLED_TASK}
+            aria-label="任务名称"
+            disabled={isSaving}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => void handleCommitRename()}
+            disabled={isSaving}
+            aria-label="保存任务名称"
+          >
+            <CheckIcon className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="mr-1 size-7"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={handleCancelRename}
+            disabled={isSaving}
+            aria-label="取消重命名"
+          >
+            <XIcon className="size-4" />
+          </Button>
+        </div>
+      ) : (
+        <>
+          <ThreadListItemPrimitive.Trigger className="flex h-full min-w-0 flex-1 items-center truncate px-3 text-start text-sm">
+            <ThreadListItemPrimitive.Title fallback={UNTITLED_TASK} />
+          </ThreadListItemPrimitive.Trigger>
+          <ThreadListItemMore onRename={handleStartRename} />
+        </>
+      )}
     </ThreadListItemPrimitive.Root>
   );
 };
 
-const ThreadListItemMore: FC = () => {
+const ThreadListItemMore: FC<{ onRename(): void }> = ({ onRename }) => {
   return (
     <ThreadListItemMorePrimitive.Root>
       <ThreadListItemMorePrimitive.Trigger asChild>
@@ -114,6 +230,17 @@ const ThreadListItemMore: FC = () => {
         align="start"
         className="z-50 min-w-32 overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
       >
+        <ThreadListItemMorePrimitive.Item
+          onSelect={onRename}
+          className={cn(
+            "flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none",
+            "hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground",
+          )}
+        >
+          <PencilIcon className="size-4" />
+          重命名
+        </ThreadListItemMorePrimitive.Item>
+
         <ThreadListItemPrimitive.Archive asChild>
           <ThreadListItemMorePrimitive.Item className="flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground">
             <ArchiveIcon className="size-4" />

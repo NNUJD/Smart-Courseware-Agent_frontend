@@ -1,24 +1,26 @@
-"use client";
+﻿"use client";
 
-import { useMemo, type FC } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FC,
+} from "react";
 import {
   CheckCircle2,
   Expand,
   Film,
   FileText,
   LayoutTemplate,
+  Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Sparkles,
 } from "lucide-react";
 import { useComposer, useComposerRuntime } from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   artifactTabs,
@@ -68,7 +70,37 @@ const panelIcons = {
   word: FileText,
 } satisfies Record<ArtifactTab, typeof LayoutTemplate>;
 
+const withAdaptivePreviewMedia = (html: string) => {
+  const marker = "data-preview-adaptive-media";
+  if (html.includes(marker)) return html;
+
+  const style = `<style ${marker}>
+  html, body {
+    max-width: 100%;
+  }
+  img, video, svg, canvas, object, embed {
+    display: block;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    height: auto !important;
+    object-fit: contain;
+  }
+  figure {
+    max-width: 100% !important;
+  }
+  </style>`;
+
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${style}</head>`);
+  }
+
+  return `${style}${html}`;
+};
+
 export const PreviewWorkbench = () => {
+  const fullscreenRef = useRef<HTMLElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isPreviewSidebarOpen, setIsPreviewSidebarOpen] = useState(true);
   const composerRuntime = useComposerRuntime();
   const composerText = useComposer((state) => state.text);
   const activeArtifact = useStudioStore((state) => state.activeArtifact);
@@ -134,8 +166,33 @@ export const PreviewWorkbench = () => {
 
   const PanelIcon = panelIcons[activeArtifact];
 
+  const handleToggleFullscreen = useCallback(async () => {
+    if (!fullscreenRef.current || !hasPreview) return;
+
+    try {
+      if (document.fullscreenElement === fullscreenRef.current) {
+        await document.exitFullscreen();
+        return;
+      }
+
+      await fullscreenRef.current.requestFullscreen();
+    } catch {
+      return;
+    }
+  }, [hasPreview]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === fullscreenRef.current);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () =>
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
   return (
-    <section className="flex min-h-0 flex-col border-border/60 border-t bg-card/75 backdrop-blur xl:border-t-0 xl:border-l">
+    <section className="flex min-h-0 flex-col border-border/60 border-t bg-card/75 backdrop-blur lg:border-t-0 lg:border-l">
       <header className="border-border/70 border-b px-5 py-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -152,6 +209,19 @@ export const PreviewWorkbench = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-full"
+              onClick={() => setIsPreviewSidebarOpen((value) => !value)}
+            >
+              {isPreviewSidebarOpen ? (
+                <PanelLeftClose className="size-4" />
+              ) : (
+                <PanelLeftOpen className="size-4" />
+              )}
+              {isPreviewSidebarOpen ? "收起侧栏" : "展开侧栏"}
+            </Button>
             <nav className="inline-flex rounded-full border border-border/70 bg-background/80 p-1">
               {artifactTabs.map((tab) => (
                 <button
@@ -174,103 +244,119 @@ export const PreviewWorkbench = () => {
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 gap-4 p-4 xl:grid-cols-[240px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col gap-4">
-          <div className="rounded-3xl border border-border/70 bg-background/75 p-4">
-            <div className="flex items-center gap-3">
-              <div className="rounded-2xl bg-accent p-2 text-accent-foreground">
-                <PanelIcon className="size-5" />
-              </div>
-              <div>
-                <p className="font-medium text-sm">{artifact.title}</p>
-                <p className="text-muted-foreground text-xs">
-                  {artifact.description}
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-4 flex items-center gap-2 text-xs">
-              <span
-                className={cn(
-                  "rounded-full px-2 py-1",
-                  artifact.status === "ready" &&
-                    "bg-emerald-100 text-emerald-700",
-                  artifact.status === "generating" &&
-                    "bg-amber-100 text-amber-700",
-                  artifact.status === "error" && "bg-rose-100 text-rose-700",
-                  artifact.status === "idle" &&
-                    "bg-secondary text-secondary-foreground",
-                )}
-              >
-                {artifact.status === "ready"
-                  ? "已生成"
-                  : artifact.status === "generating"
-                    ? "生成中"
-                    : artifact.status === "error"
-                      ? "异常"
-                      : "待生成"}
-              </span>
-              {isSyncing ? (
-                <span className="text-muted-foreground">同步中...</span>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-border/70 bg-background/75 p-4">
-            <p className="font-medium text-sm">预览结构</p>
-            <div className="mt-3 space-y-2">
-              {listItems.length > 0 ? (
-                listItems.map((item, index) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setSelectedNode(activeArtifact, item.id)}
-                    className={cn(
-                      "block w-full rounded-2xl border px-3 py-3 text-left transition-colors",
-                      selectedNodeId === item.id
-                        ? "border-primary bg-primary/8"
-                        : "border-border/60 bg-background hover:border-primary/50",
-                    )}
-                  >
-                    <p className="text-muted-foreground text-xs">
-                      {activeArtifact === "ppt"
-                        ? `第 ${index + 1} 页`
-                        : activeArtifact === "video"
-                          ? `镜头 ${index + 1}`
-                          : `模块 ${index + 1}`}
-                    </p>
-                    <p className="mt-1 font-medium text-sm">{item.title}</p>
-                    <p className="mt-1 line-clamp-2 text-muted-foreground text-xs leading-5">
-                      {item.summary}
-                    </p>
-                  </button>
-                ))
-              ) : (
-                <div className="rounded-2xl border border-border/60 border-dashed px-3 py-4 text-muted-foreground text-sm">
-                  完成一轮需求澄清后，这里会出现章节、页面或视频分镜。
+      <div
+        className={cn(
+          "grid min-h-0 flex-1 gap-4 p-4",
+          isPreviewSidebarOpen
+            ? "xl:grid-cols-[240px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)]"
+            : "grid-cols-1",
+        )}
+      >
+        {isPreviewSidebarOpen ? (
+          <aside className="flex min-h-0 flex-col gap-4">
+            <div className="rounded-3xl border border-border/70 bg-background/75 p-4">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-accent p-2 text-accent-foreground">
+                  <PanelIcon className="size-5" />
                 </div>
-              )}
-            </div>
-          </div>
+                <div>
+                  <p className="font-medium text-sm">{artifact.title}</p>
+                  <p className="text-muted-foreground text-xs">
+                    {artifact.description}
+                  </p>
+                </div>
+              </div>
 
-          <div className="rounded-3xl border border-border/70 bg-background/75 p-4">
-            <p className="font-medium text-sm">快捷修改建议</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {feedbackTemplates[activeArtifact].map((template) => (
-                <button
-                  key={template}
-                  type="button"
-                  onClick={() => queueFeedback(template)}
-                  className="rounded-full border border-border/70 bg-background px-3 py-2 text-left text-xs transition-colors hover:border-primary/60 hover:bg-primary/5"
+              <div className="mt-4 flex items-center gap-2 text-xs">
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-1",
+                    artifact.status === "ready" &&
+                      "bg-emerald-100 text-emerald-700",
+                    artifact.status === "generating" &&
+                      "bg-amber-100 text-amber-700",
+                    artifact.status === "error" && "bg-rose-100 text-rose-700",
+                    artifact.status === "idle" &&
+                      "bg-secondary text-secondary-foreground",
+                  )}
                 >
-                  {template}
-                </button>
-              ))}
+                  {artifact.status === "ready"
+                    ? "已生成"
+                    : artifact.status === "generating"
+                      ? "生成中"
+                      : artifact.status === "error"
+                        ? "异常"
+                        : "待生成"}
+                </span>
+                {isSyncing ? (
+                  <span className="text-muted-foreground">同步中...</span>
+                ) : null}
+              </div>
             </div>
-          </div>
-        </aside>
 
-        <main className="min-h-0 rounded-[28px] border border-border/70 bg-background/85 p-4 shadow-sm lg:p-5">
+            <div className="rounded-3xl border border-border/70 bg-background/75 p-4">
+              <p className="font-medium text-sm">预览结构</p>
+              <div className="mt-3 space-y-2">
+                {listItems.length > 0 ? (
+                  listItems.map((item, index) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setSelectedNode(activeArtifact, item.id)}
+                      className={cn(
+                        "block w-full rounded-2xl border px-3 py-3 text-left transition-colors",
+                        selectedNodeId === item.id
+                          ? "border-primary bg-primary/8"
+                          : "border-border/60 bg-background hover:border-primary/50",
+                      )}
+                    >
+                      <p className="text-muted-foreground text-xs">
+                        {activeArtifact === "ppt"
+                          ? `第 ${index + 1} 页`
+                          : activeArtifact === "video"
+                            ? `镜头 ${index + 1}`
+                            : `模块 ${index + 1}`}
+                      </p>
+                      <p className="mt-1 font-medium text-sm">{item.title}</p>
+                      <p className="mt-1 line-clamp-2 text-muted-foreground text-xs leading-5">
+                        {item.summary}
+                      </p>
+                    </button>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-border/60 border-dashed px-3 py-4 text-muted-foreground text-sm">
+                    完成一轮需求澄清后，这里会出现章节、页面或视频分镜。
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-border/70 bg-background/75 p-4">
+              <p className="font-medium text-sm">快捷修改建议</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {feedbackTemplates[activeArtifact].map((template) => (
+                  <button
+                    key={template}
+                    type="button"
+                    onClick={() => queueFeedback(template)}
+                    className="rounded-full border border-border/70 bg-background px-3 py-2 text-left text-xs transition-colors hover:border-primary/60 hover:bg-primary/5"
+                  >
+                    {template}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </aside>
+        ) : null}
+
+        <main
+          ref={fullscreenRef}
+          className={cn(
+            "min-h-0 rounded-[28px] border border-border/70 bg-background/85 p-4 shadow-sm lg:p-5",
+            isFullscreen &&
+              "h-screen w-screen rounded-none border-0 p-6 shadow-none",
+          )}
+        >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-muted-foreground text-xs">当前查看</p>
@@ -279,41 +365,20 @@ export const PreviewWorkbench = () => {
               </h3>
             </div>
 
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="rounded-full"
-                  disabled={!hasPreview}
-                >
-                  <Expand className="size-4" />
-                  放大预览
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="h-[92vh] w-[96vw] max-w-[1440px] overflow-hidden rounded-[32px] p-0">
-                <div className="flex h-full min-h-0 flex-col">
-                  <DialogHeader className="border-border/70 border-b px-6 py-4">
-                    <DialogTitle>{artifact.title}</DialogTitle>
-                    <DialogDescription>
-                      {currentTitle
-                        ? `正在查看：${currentTitle}`
-                        : "当前还没有可放大的预览内容。"}
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="min-h-0 flex-1 overflow-auto p-6">
-                    <ArtifactPreviewSurface
-                      activeArtifact={activeArtifact}
-                      artifact={artifact}
-                      currentScene={currentScene}
-                      currentSection={currentSection}
-                      currentSlide={currentSlide}
-                      expanded
-                    />
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-full"
+              disabled={!hasPreview}
+              onClick={() => void handleToggleFullscreen()}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="size-4" />
+              ) : (
+                <Expand className="size-4" />
+              )}
+              {isFullscreen ? "退出全屏" : "放大预览"}
+            </Button>
           </div>
 
           <ArtifactPreviewSurface
@@ -322,6 +387,7 @@ export const PreviewWorkbench = () => {
             currentScene={currentScene}
             currentSection={currentSection}
             currentSlide={currentSlide}
+            expanded={isFullscreen}
           />
         </main>
       </div>
@@ -367,7 +433,7 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
 
         <iframe
           title={currentSlide.title}
-          srcDoc={currentSlide.html}
+          srcDoc={withAdaptivePreviewMedia(currentSlide.html)}
           className={cn(
             "w-full flex-1 rounded-[24px] border border-border/70 bg-white",
             expanded ? "min-h-[70vh]" : "min-h-[480px]",
@@ -450,8 +516,8 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
       <div className="max-w-md">
         <p className="font-medium">等待生成首版结果</p>
         <p className="mt-2 text-muted-foreground text-sm leading-6">
-          当左侧完成教学目标、知识点、资料用途和产出风格的澄清后，右侧会显示可修改的教案、
-          PPT、视频和 Word 预览。
+          当左侧完成教学目标、知识点、资料用途和产出风格的澄清后，右侧会显示可修改的教案、PPT、视频和
+          Word 预览。
         </p>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   ArtifactTab,
   IntentDraft,
   PreviewSection,
@@ -45,7 +45,11 @@ const inferAudience = (input: string) => {
     "一年级",
     "二年级",
     "三年级",
+    "四年级",
+    "五年级",
+    "六年级",
   ];
+
   return candidates.find((candidate) => input.includes(candidate)) ?? "";
 };
 
@@ -141,7 +145,7 @@ const buildLessonPlanSections = (intent: IntentDraft): PreviewSection[] => {
       `目标聚焦：${intent.teachingGoal}`,
       `核心知识：${intent.knowledgePoints[index] ?? intent.knowledgePoints[0]}`,
       `教师动作：使用提问、示例和板书逐步推进${step}。`,
-      `学生任务：根据当前环节完成口头表达、练习或案例讨论。`,
+      "学生活动：根据当前环节完成口头表达、练习或案例讨论。",
       `提醒：注意突出${intent.keyDifficulties[index] ?? intent.keyDifficulties[0] ?? "重点难点"}。`,
     ].join("\n\n"),
   }));
@@ -208,7 +212,7 @@ const buildWordSections = (intent: IntentDraft): PreviewSection[] => {
       `一、知识说明：${knowledgePoint}`,
       `二、适用对象：${intent.audience || "目标学段学生"}`,
       `三、课堂提醒：${intent.keyDifficulties[index] ?? intent.keyDifficulties[0] ?? "强调易错点"}`,
-      "四、练习建议：补充一题基础练习与一题迁移练习。",
+      "四、练习建议：补充一道基础练习与一道迁移练习。",
       "五、教师备注：可在课后打印发放，或作为导学单附在课件后。",
     ].join("\n\n"),
   }));
@@ -278,19 +282,19 @@ const createArtifacts = (intent: IntentDraft): StudioArtifacts => {
   };
 };
 
+const tabLabels: Record<ArtifactTab, string> = {
+  "lesson-plan": "教案",
+  ppt: "PPT",
+  video: "视频",
+  word: "Word",
+};
+
 const buildSummary = (intent: IntentDraft, activeTab: ArtifactTab) => {
   return `当前已整理出${intent.knowledgePoints.length}个知识点，并生成${tabLabels[activeTab]}方向的首版预览。${
     intent.missingFields.length > 0
       ? `仍建议补充：${intent.missingFields.join("、")}。`
       : "当前信息已满足继续细化修改。"
   }`;
-};
-
-const tabLabels: Record<ArtifactTab, string> = {
-  "lesson-plan": "教案",
-  ppt: "PPT",
-  video: "视频",
-  word: "Word",
 };
 
 export async function POST(request: Request) {

@@ -162,7 +162,16 @@ export const useStudioStore = create<StudioState>((set) => ({
       for (const tab of Object.keys(response.artifacts) as ArtifactTab[]) {
         const artifact = response.artifacts[tab];
         const existingSelection = state.selectedNodeIds[tab];
-        if (existingSelection) continue;
+        const availableNodeIds = [
+          ...artifact.sections.map((item) => item.id),
+          ...artifact.slides.map((item) => item.id),
+          ...artifact.storyboard.map((item) => item.id),
+        ];
+
+        if (existingSelection && availableNodeIds.includes(existingSelection)) {
+          selectedNodeIds[tab] = existingSelection;
+          continue;
+        }
 
         selectedNodeIds[tab] =
           artifact.sections[0]?.id ??

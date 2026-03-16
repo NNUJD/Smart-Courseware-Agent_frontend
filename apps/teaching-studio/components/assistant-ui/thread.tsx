@@ -271,7 +271,10 @@ const Composer: FC = () => {
 
 const AssistantMessage: FC = () => {
   return (
-    <MessagePrimitive.Root className="mx-auto w-full max-w-(--thread-max-width) py-3">
+    <MessagePrimitive.Root
+      data-teaching-role="assistant"
+      className="mx-auto w-full max-w-(--thread-max-width) py-3"
+    >
       <div className="rounded-[24px] border border-border/60 bg-background/85 px-4 py-4 text-foreground leading-relaxed shadow-sm">
         <MessagePrimitive.Parts
           components={{
@@ -325,7 +328,10 @@ const AssistantActionBar: FC = () => {
 
 const UserMessage: FC = () => {
   return (
-    <MessagePrimitive.Root className="mx-auto grid w-full max-w-(--thread-max-width) grid-cols-[minmax(72px,1fr)_auto] gap-y-2 px-2 py-3 [&:where(>*)]:col-start-2">
+    <MessagePrimitive.Root
+      data-teaching-role="user"
+      className="mx-auto grid w-full max-w-(--thread-max-width) grid-cols-[minmax(72px,1fr)_auto] gap-y-2 px-2 py-3 [&:where(>*)]:col-start-2"
+    >
       <UserMessageAttachments />
 
       <div className="relative col-start-2 min-w-0">

@@ -3,6 +3,19 @@ import type {
   MaterialUploadResponse,
 } from "@/lib/studio-contract";
 
+const backendBaseUrl =
+  process.env.TEACHING_BACKEND_BASE_URL ?? "http://127.0.0.1:8000";
+const backendIngestEndpoint = `${backendBaseUrl.replace(/\/$/, "")}/api/v1/knowledge/upload-and-ingest`;
+
+const backendIngestableSuffixes = new Set([
+  ".pdf",
+  ".txt",
+  ".md",
+  ".json",
+  ".yml",
+  ".yaml",
+]);
+
 const inferSuggestedRole = (
   fileName: string,
   mimeType: string,
@@ -18,17 +31,66 @@ const inferSuggestedRole = (
   return "case";
 };
 
-const inferSummary = (fileName: string, mimeType: string) => {
+const getFileSuffix = (fileName: string) => {
+  const lowered = fileName.toLowerCase();
+  const lastDot = lowered.lastIndexOf(".");
+  if (lastDot === -1) return "";
+  return lowered.slice(lastDot);
+};
+
+const canIngestWithBackend = (fileName: string) => {
+  const suffix = getFileSuffix(fileName);
+  return backendIngestableSuffixes.has(suffix);
+};
+
+const buildFallbackSummary = (fileName: string, mimeType: string) => {
   if (mimeType.startsWith("video/")) {
-    return `已接收视频素材《${fileName}》，后端可在此接入视频摘要、关键帧抽取与分镜标签能力。`;
+    return `已上传视频资料《${fileName}》，当前后端暂未接入视频摘要与关键帧解析，先作为参考素材保存。`;
   }
 
   if (mimeType.startsWith("image/")) {
-    return `已接收图片资料《${fileName}》，后端可在此接入版式识别、图示提取与视觉风格分析。`;
+    return `已上传图片资料《${fileName}》，当前后端暂未接入图像语义解析，先作为风格参考保存。`;
   }
 
-  return `已接收文档《${fileName}》，后端可在此接入 PDF / Word / PPT 文本解析、结构切块与知识点抽取。`;
+  return `已上传文件《${fileName}》，当前后端暂未解析该格式，先作为参考资料保存。`;
 };
+
+type BackendIngestResponse = {
+  filename: string;
+  source: string;
+  document_count: number;
+  chunk_count: number;
+  ingested_document_count: number;
+  ingested_chunk_count: number;
+  retrieval_mode: string;
+};
+
+const buildMaterialResponse = ({
+  id,
+  name,
+  mimeType,
+  size,
+  parseSummary,
+  suggestedRole,
+}: {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  parseSummary: string;
+  suggestedRole: MaterialRole;
+}): MaterialUploadResponse => ({
+  material: {
+    id,
+    name,
+    mimeType,
+    size,
+    createdAt: new Date().toISOString(),
+    status: "ready",
+    parseSummary,
+    suggestedRole,
+  },
+});
 
 export async function POST(request: Request) {
   const formData = await request.formData();
@@ -38,18 +100,53 @@ export async function POST(request: Request) {
     return Response.json({ error: "missing_file" }, { status: 400 });
   }
 
-  const response: MaterialUploadResponse = {
-    material: {
-      id: crypto.randomUUID(),
-      name: file.name,
-      mimeType: file.type || "application/octet-stream",
-      size: file.size,
-      createdAt: new Date().toISOString(),
-      status: "ready",
-      parseSummary: inferSummary(file.name, file.type),
-      suggestedRole: inferSuggestedRole(file.name, file.type),
-    },
-  };
+  const suggestedRole = inferSuggestedRole(file.name, file.type);
+  const id = crypto.randomUUID();
+  const mimeType = file.type || "application/octet-stream";
 
-  return Response.json(response);
+  if (!canIngestWithBackend(file.name)) {
+    return Response.json(
+      buildMaterialResponse({
+        id,
+        name: file.name,
+        mimeType,
+        size: file.size,
+        parseSummary: buildFallbackSummary(file.name, mimeType),
+        suggestedRole,
+      }),
+    );
+  }
+
+  const backendForm = new FormData();
+  backendForm.append("file", file, file.name);
+
+  const backendResponse = await fetch(backendIngestEndpoint, {
+    method: "POST",
+    body: backendForm,
+  });
+
+  if (!backendResponse.ok) {
+    const detail = await backendResponse.text();
+    return Response.json(
+      {
+        error: "backend_upload_failed",
+        detail: detail || "Backend upload-and-ingest endpoint failed.",
+      },
+      { status: backendResponse.status },
+    );
+  }
+
+  const payload = (await backendResponse.json()) as BackendIngestResponse;
+  const parseSummary = `已上传并完成入库《${payload.filename}》，本次新增 ${payload.ingested_chunk_count} 个知识片段，当前总片段 ${payload.chunk_count}，检索模式为 ${payload.retrieval_mode}。`;
+
+  return Response.json(
+    buildMaterialResponse({
+      id,
+      name: file.name,
+      mimeType,
+      size: file.size,
+      parseSummary,
+      suggestedRole,
+    }),
+  );
 }

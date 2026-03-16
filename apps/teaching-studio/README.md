@@ -5,11 +5,11 @@ in `API_CONTRACT.md`.
 
 ## Getting Started
 
-If you want to run the current demo backend behavior locally, add your OpenAI
-API key to `.env.local`:
+Set your backend address in `.env.local`:
 
 ```
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TEACHING_BACKEND_BASE_URL=http://127.0.0.1:8000
+TEACHING_BACKEND_USER_ID=teacher-001
 ```
 
 Then, run the development server:
@@ -46,11 +46,14 @@ docker build -f apps/teaching-studio/Dockerfile -t teaching-studio .
 Run:
 
 ```bash
-docker run --rm -p 3000:3000 -e OPENAI_API_KEY=your_key teaching-studio
+docker run --rm -p 3000:3000 \
+  -e TEACHING_BACKEND_BASE_URL=http://host.docker.internal:8000 \
+  -e TEACHING_BACKEND_USER_ID=teacher-001 \
+  teaching-studio
 ```
 
 Or use Compose from the monorepo root:
 
 ```bash
-OPENAI_API_KEY=your_key docker compose up --build
+TEACHING_BACKEND_BASE_URL=http://host.docker.internal:8000 docker compose up --build
 ```

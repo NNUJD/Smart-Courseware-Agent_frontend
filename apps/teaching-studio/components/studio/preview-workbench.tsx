@@ -99,8 +99,14 @@ const withAdaptivePreviewMedia = (html: string) => {
 
 export const PreviewWorkbench = () => {
   const fullscreenRef = useRef<HTMLElement>(null);
+  const structureViewportRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPreviewSidebarOpen, setIsPreviewSidebarOpen] = useState(true);
+  const [structureScrollbar, setStructureScrollbar] = useState({
+    visible: false,
+    thumbHeight: 32,
+    thumbTop: 0,
+  });
   const composerRuntime = useComposerRuntime();
   const composerText = useComposer((state) => state.text);
   const activeArtifact = useStudioStore((state) => state.activeArtifact);
@@ -166,6 +172,81 @@ export const PreviewWorkbench = () => {
 
   const PanelIcon = panelIcons[activeArtifact];
 
+  const updateStructureScrollbar = useCallback(() => {
+    const viewport = structureViewportRef.current;
+    if (!viewport) return;
+
+    const { scrollHeight, clientHeight, scrollTop } = viewport;
+    const isScrollable = scrollHeight > clientHeight + 1;
+
+    if (!isScrollable) {
+      setStructureScrollbar((prev) => {
+        if (!prev.visible && prev.thumbTop === 0) return prev;
+        return { visible: false, thumbHeight: 32, thumbTop: 0 };
+      });
+      return;
+    }
+
+    const rawThumbHeight = (clientHeight / scrollHeight) * clientHeight;
+    const thumbHeight = Math.max(30, Math.round(rawThumbHeight));
+    const maxThumbTop = Math.max(0, clientHeight - thumbHeight);
+    const thumbTop =
+      scrollHeight === clientHeight
+        ? 0
+        : Math.round((scrollTop / (scrollHeight - clientHeight)) * maxThumbTop);
+
+    setStructureScrollbar((prev) => {
+      if (
+        prev.visible &&
+        prev.thumbHeight === thumbHeight &&
+        prev.thumbTop === thumbTop
+      ) {
+        return prev;
+      }
+
+      return {
+        visible: true,
+        thumbHeight,
+        thumbTop,
+      };
+    });
+  }, []);
+
+  const handleStructureThumbPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      const viewport = structureViewportRef.current;
+      if (!viewport) return;
+
+      const { scrollHeight, clientHeight } = viewport;
+      const scrollable = scrollHeight - clientHeight;
+      if (scrollable <= 0) return;
+
+      event.preventDefault();
+
+      const rawThumbHeight = (clientHeight / scrollHeight) * clientHeight;
+      const thumbHeight = Math.max(30, rawThumbHeight);
+      const maxThumbTop = Math.max(1, clientHeight - thumbHeight);
+      const startY = event.clientY;
+      const startScrollTop = viewport.scrollTop;
+
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        const deltaY = moveEvent.clientY - startY;
+        const nextScrollTop =
+          startScrollTop + (deltaY / maxThumbTop) * scrollable;
+        viewport.scrollTop = Math.min(scrollable, Math.max(0, nextScrollTop));
+      };
+
+      const onPointerUp = () => {
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+    },
+    [],
+  );
+
   const handleToggleFullscreen = useCallback(async () => {
     if (!fullscreenRef.current || !hasPreview) return;
 
@@ -190,6 +271,38 @@ export const PreviewWorkbench = () => {
     return () =>
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
+
+  useEffect(() => {
+    if (!isPreviewSidebarOpen) return;
+
+    updateStructureScrollbar();
+
+    const viewport = structureViewportRef.current;
+    if (!viewport) return;
+
+    window.addEventListener("resize", updateStructureScrollbar);
+
+    if (typeof ResizeObserver === "undefined") {
+      return () => {
+        window.removeEventListener("resize", updateStructureScrollbar);
+      };
+    }
+
+    const observer = new ResizeObserver(() => {
+      updateStructureScrollbar();
+    });
+
+    observer.observe(viewport);
+    const contentNode = viewport.firstElementChild;
+    if (contentNode) {
+      observer.observe(contentNode);
+    }
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateStructureScrollbar);
+    };
+  }, [isPreviewSidebarOpen, updateStructureScrollbar]);
 
   return (
     <section className="flex min-h-0 flex-col border-border/60 border-t bg-card/75 backdrop-blur lg:border-t-0 lg:border-l">
@@ -296,38 +409,63 @@ export const PreviewWorkbench = () => {
 
             <div className="rounded-3xl border border-border/70 bg-background/75 p-4">
               <p className="font-medium text-sm">预览结构</p>
-              <div className="mt-3 space-y-2">
-                {listItems.length > 0 ? (
-                  listItems.map((item, index) => (
+              <div className="relative mt-3">
+                <div
+                  ref={structureViewportRef}
+                  onScroll={updateStructureScrollbar}
+                  className={cn(
+                    "space-y-2 pr-4",
+                    listItems.length > 0 && "max-h-[54vh] overflow-y-auto",
+                  )}
+                >
+                  {listItems.length > 0 ? (
+                    listItems.map((item, index) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setSelectedNode(activeArtifact, item.id)}
+                        className={cn(
+                          "block w-full rounded-2xl border px-3 py-3 text-left transition-colors",
+                          selectedNodeId === item.id
+                            ? "border-primary bg-primary/8"
+                            : "border-border/60 bg-background hover:border-primary/50",
+                        )}
+                      >
+                        <p className="text-muted-foreground text-xs">
+                          {activeArtifact === "ppt"
+                            ? `第 ${index + 1} 页`
+                            : activeArtifact === "video"
+                              ? `镜头 ${index + 1}`
+                              : `模块 ${index + 1}`}
+                        </p>
+                        <p className="mt-1 font-medium text-sm">{item.title}</p>
+                        <p className="mt-1 line-clamp-2 text-muted-foreground text-xs leading-5">
+                          {item.summary}
+                        </p>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl border border-border/60 border-dashed px-3 py-4 text-muted-foreground text-sm">
+                      完成一轮需求澄清后，这里会出现章节、页面或视频分镜。
+                    </div>
+                  )}
+                </div>
+
+                {structureScrollbar.visible ? (
+                  <div className="pointer-events-none absolute top-0 right-0 bottom-0 w-3">
+                    <div className="absolute top-0 right-[5px] bottom-0 w-px bg-border/80" />
                     <button
-                      key={item.id}
                       type="button"
-                      onClick={() => setSelectedNode(activeArtifact, item.id)}
-                      className={cn(
-                        "block w-full rounded-2xl border px-3 py-3 text-left transition-colors",
-                        selectedNodeId === item.id
-                          ? "border-primary bg-primary/8"
-                          : "border-border/60 bg-background hover:border-primary/50",
-                      )}
-                    >
-                      <p className="text-muted-foreground text-xs">
-                        {activeArtifact === "ppt"
-                          ? `第 ${index + 1} 页`
-                          : activeArtifact === "video"
-                            ? `镜头 ${index + 1}`
-                            : `模块 ${index + 1}`}
-                      </p>
-                      <p className="mt-1 font-medium text-sm">{item.title}</p>
-                      <p className="mt-1 line-clamp-2 text-muted-foreground text-xs leading-5">
-                        {item.summary}
-                      </p>
-                    </button>
-                  ))
-                ) : (
-                  <div className="rounded-2xl border border-border/60 border-dashed px-3 py-4 text-muted-foreground text-sm">
-                    完成一轮需求澄清后，这里会出现章节、页面或视频分镜。
+                      onPointerDown={handleStructureThumbPointerDown}
+                      className="pointer-events-auto absolute right-0 w-3 rounded-full bg-primary/40 transition-colors hover:bg-primary/55 active:bg-primary/70"
+                      style={{
+                        height: `${structureScrollbar.thumbHeight}px`,
+                        transform: `translateY(${structureScrollbar.thumbTop}px)`,
+                      }}
+                      aria-label="拖动滚动预览结构"
+                    />
                   </div>
-                )}
+                ) : null}
               </div>
             </div>
 

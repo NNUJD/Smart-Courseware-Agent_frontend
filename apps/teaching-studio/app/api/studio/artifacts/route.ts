@@ -70,26 +70,107 @@ const mergeUnique = (...lists: string[][]) => {
   );
 };
 
+const getLatestAssistantDraft = (
+  conversation: StudioArtifactRequest["conversation"],
+) => {
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    const turn = conversation[index];
+    if (turn.role !== "assistant") continue;
+    const text = turn.text.trim();
+    if (!text) continue;
+    if (/^(当前可用上下文还不够|我继续前需要一个关键信息)/.test(text)) continue;
+    return text;
+  }
+  return "";
+};
+
+const getLatestConversationText = (
+  conversation: StudioArtifactRequest["conversation"],
+) =>
+  conversation
+    .slice(-8)
+    .map((turn) => turn.text.trim())
+    .filter(Boolean)
+    .join("\n");
+
+const toSummary = (input: string, fallback: string) => {
+  const normalized = input.replace(/\s+/g, " ").trim();
+  if (!normalized) return fallback;
+  return normalized.slice(0, 64);
+};
+
+const parseMarkdownSections = (draft: string): PreviewSection[] => {
+  const headingMatches = [...draft.matchAll(/^#{1,6}\s+(.+)$/gm)];
+  if (headingMatches.length < 2) return [];
+
+  return headingMatches
+    .slice(0, 10)
+    .map((match, index) => {
+      const title = match[1].trim();
+      const sectionStart = match.index ?? 0;
+      const contentStart = sectionStart + match[0].length;
+      const nextMatch = headingMatches[index + 1];
+      const contentEnd = nextMatch?.index ?? draft.length;
+      const body = draft.slice(contentStart, contentEnd).trim();
+      return {
+        id: `lesson-ai-${index + 1}`,
+        title: title || `模块 ${index + 1}`,
+        summary: toSummary(
+          body,
+          `围绕“${title || `模块 ${index + 1}`}”展开课堂内容。`,
+        ),
+        body,
+      };
+    })
+    .filter((section) => section.body.length > 0);
+};
+
+const buildAssistantBackedLessonSections = (
+  draft: string,
+  intent: IntentDraft,
+): PreviewSection[] => {
+  const markdownSections = parseMarkdownSections(draft);
+  if (markdownSections.length > 0) return markdownSections;
+
+  const body = draft.trim();
+  if (!body) return [];
+
+  return [
+    {
+      id: "lesson-ai-full",
+      title: "教案初稿",
+      summary: toSummary(
+        body,
+        `围绕“${intent.knowledgePoints[0] ?? "核心知识点"}”生成的完整教案草案。`,
+      ),
+      duration: intent.duration || undefined,
+      body,
+    },
+  ];
+};
+
 const buildIntentDraft = (request: StudioArtifactRequest): IntentDraft => {
   const latestPrompt = request.latestPrompt;
+  const conversationText = getLatestConversationText(request.conversation);
   const existing = request.intentDraft;
   const materialKnowledge = request.materials.flatMap(
     (material) => material.linkedKnowledgePoints,
   );
+  const intentSourceText = `${latestPrompt}\n${conversationText}`;
 
   const teachingGoal =
     existing.teachingGoal ||
-    extractBetween(latestPrompt, ["教学目标", "目标是", "希望达成"]) ||
+    extractBetween(intentSourceText, ["教学目标", "目标是", "希望达成"]) ||
     "围绕核心知识点完成一节可直接落地的课堂设计";
-  const audience = existing.audience || inferAudience(latestPrompt);
-  const duration = existing.duration || inferDuration(latestPrompt);
-  const outputStyle = existing.outputStyle || inferStyle(latestPrompt);
+  const audience = existing.audience || inferAudience(intentSourceText);
+  const duration = existing.duration || inferDuration(intentSourceText);
+  const outputStyle = existing.outputStyle || inferStyle(intentSourceText);
 
   const detectedKnowledge = mergeUnique(
     existing.knowledgePoints,
     materialKnowledge,
     splitKeywords(
-      extractBetween(latestPrompt, ["知识点", "重点内容", "围绕", "讲解"]),
+      extractBetween(intentSourceText, ["知识点", "重点内容", "围绕", "讲解"]),
     ),
   );
 
@@ -227,8 +308,18 @@ const buildStoryboard = (intent: IntentDraft): VideoStoryboardScene[] => {
   }));
 };
 
-const createArtifacts = (intent: IntentDraft): StudioArtifacts => {
-  const lessonPlanSections = buildLessonPlanSections(intent);
+const createArtifacts = (
+  intent: IntentDraft,
+  assistantDraft: string,
+): StudioArtifacts => {
+  const assistantSections = buildAssistantBackedLessonSections(
+    assistantDraft,
+    intent,
+  );
+  const lessonPlanSections =
+    assistantSections.length > 0
+      ? assistantSections
+      : buildLessonPlanSections(intent);
   const slides = buildSlides(intent);
   const storyboard = buildStoryboard(intent);
   const wordSections = buildWordSections(intent);
@@ -289,8 +380,15 @@ const tabLabels: Record<ArtifactTab, string> = {
   word: "Word",
 };
 
-const buildSummary = (intent: IntentDraft, activeTab: ArtifactTab) => {
-  return `当前已整理出${intent.knowledgePoints.length}个知识点，并生成${tabLabels[activeTab]}方向的首版预览。${
+const buildSummary = (
+  intent: IntentDraft,
+  activeTab: ArtifactTab,
+  hasAssistantDraft: boolean,
+) => {
+  const sourceHint = hasAssistantDraft
+    ? "已同步最新对话草案。"
+    : "当前仍使用结构化模板预览。";
+  return `${sourceHint} 当前已整理出${intent.knowledgePoints.length}个知识点，并生成${tabLabels[activeTab]}方向的首版预览。${
     intent.missingFields.length > 0
       ? `仍建议补充：${intent.missingFields.join("、")}。`
       : "当前信息已满足继续细化修改。"
@@ -300,12 +398,17 @@ const buildSummary = (intent: IntentDraft, activeTab: ArtifactTab) => {
 export async function POST(request: Request) {
   const body = (await request.json()) as StudioArtifactRequest;
   const intentDraft = buildIntentDraft(body);
-  const artifacts = createArtifacts(intentDraft);
+  const assistantDraft = getLatestAssistantDraft(body.conversation);
+  const artifacts = createArtifacts(intentDraft, assistantDraft);
 
   const response: StudioArtifactResponse = {
     intentDraft,
     artifacts,
-    summary: buildSummary(intentDraft, body.activeTab),
+    summary: buildSummary(
+      intentDraft,
+      body.activeTab,
+      assistantDraft.length > 0,
+    ),
   };
 
   return Response.json(response);

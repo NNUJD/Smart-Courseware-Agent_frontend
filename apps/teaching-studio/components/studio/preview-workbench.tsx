@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import Link from "next/link";
 import {
   useCallback,
   useEffect,
@@ -351,6 +352,12 @@ export const PreviewWorkbench = () => {
                   {tabLabels[tab]}
                 </button>
               ))}
+              <Link
+                href="/virtual-labs/buoyancy"
+                className="rounded-full px-4 py-2 text-muted-foreground text-sm transition-colors hover:text-foreground"
+              >
+                仿真
+              </Link>
             </nav>
             <ExportButton />
           </div>

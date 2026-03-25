@@ -1,47 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { useAuiState } from "@assistant-ui/react";
 import type {
+  ArtifactTab,
   StudioArtifactRequest,
   StudioArtifactResponse,
   StudioConversationTurn,
 } from "@/lib/studio-contract";
 import { useStudioStore } from "@/lib/studio-store";
-
-const extractTextDeep = (
-  value: unknown,
-  seen = new WeakSet<object>(),
-): string => {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (!value || typeof value !== "object") return "";
-
-  if (seen.has(value)) return "";
-  seen.add(value);
-
-  if (Array.isArray(value)) {
-    return value.map((item) => extractTextDeep(item, seen)).join("\n");
-  }
-
-  const record = value as Record<string, unknown>;
-  const directText =
-    (typeof record.text === "string" ? record.text : "") ||
-    (typeof record.content === "string" ? record.content : "");
-
-  const nestedText = [
-    extractTextDeep(record.parts, seen),
-    extractTextDeep(record.content, seen),
-    extractTextDeep(record.delta, seen),
-    extractTextDeep(record.value, seen),
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  return [directText, nestedText].filter(Boolean).join("\n");
-};
 
 const normalizeText = (input: string) =>
   input
@@ -70,71 +36,43 @@ const readConversationFromDom = (): StudioConversationTurn[] => {
     .filter((item) => item.text.length > 0);
 };
 
-const conversationScore = (conversation: StudioConversationTurn[]) => {
-  return conversation.reduce((sum, turn) => {
-    if (turn.role !== "assistant") return sum;
-    return sum + turn.text.length;
-  }, 0);
-};
+const getLatestUserPrompt = (conversation: StudioConversationTurn[]) =>
+  conversation.filter((message) => message.role === "user").at(-1)?.text ?? "";
 
-const pickBetterConversation = (
-  stateConversation: StudioConversationTurn[],
-  domConversation: StudioConversationTurn[],
+const sameConversation = (
+  left: StudioConversationTurn[],
+  right: StudioConversationTurn[],
 ) => {
-  if (domConversation.length === 0) return stateConversation;
-  if (stateConversation.length === 0) return domConversation;
-
-  if (
-    conversationScore(domConversation) > conversationScore(stateConversation)
-  ) {
-    return domConversation;
-  }
-
-  return stateConversation;
+  if (left.length !== right.length) return false;
+  return left.every(
+    (item, index) =>
+      item.role === right[index]?.role && item.text === right[index]?.text,
+  );
 };
 
 export const StudioSyncBridge = () => {
-  const threadMessages = useAuiState(
-    (state: any) => state.thread.messages as Array<Record<string, unknown>>,
-  );
-
-  const conversation = useMemo<StudioConversationTurn[]>(
-    () =>
-      (threadMessages ?? [])
-        .map((message) => ({
-          role: (String(message.role) === "assistant"
-            ? "assistant"
-            : "user") as StudioConversationTurn["role"],
-          text: normalizeText(
-            extractTextDeep({
-              content: message.content,
-              parts: message.parts,
-              text: message.text,
-            }),
-          ),
-        }))
-        .filter((message) => message.text.length > 0),
-    [threadMessages],
-  );
+  const mountedRef = useRef(true);
 
   const studioMaterials = useStudioStore((state) => state.materials);
-  const materials = useMemo(
-    () =>
-      studioMaterials.map((material) => ({
-        id: material.id,
-        name: material.name,
-        mimeType: material.mimeType,
-        size: material.size,
-        role: material.role,
-        linkedKnowledgePoints: material.linkedKnowledgePoints,
-        note: material.note,
-        parseSummary: material.parseSummary,
-      })),
-    [studioMaterials],
-  );
+  const materials = studioMaterials.map((material) => ({
+    id: material.id,
+    name: material.name,
+    mimeType: material.mimeType,
+    size: material.size,
+    role: material.role,
+    linkedKnowledgePoints: material.linkedKnowledgePoints,
+    note: material.note,
+    parseSummary: material.parseSummary,
+  }));
 
   const activeTab = useStudioStore((state) => state.activeArtifact);
+  const artifacts = useStudioStore((state) => state.artifacts);
+  const isSyncing = useStudioStore((state) => state.isSyncing);
   const intentDraft = useStudioStore((state) => state.intentDraft);
+  const currentProjectId = useStudioStore((state) => state.currentProjectId);
+  const latestPrompt = useStudioStore((state) => state.latestPrompt);
+  const persistedConversation = useStudioStore((state) => state.conversation);
+  const setSyncContext = useStudioStore((state) => state.setSyncContext);
   const startSync = useStudioStore((state) => state.startSync);
   const syncFailed = useStudioStore((state) => state.syncFailed);
   const applyArtifactResponse = useStudioStore(
@@ -157,28 +95,63 @@ export const StudioSyncBridge = () => {
     [materials],
   );
 
-  const previousDigestRef = useRef<string | null>(null);
+  const lastCompletedDigestRef = useRef<string | null>(null);
+  const inFlightDigestRef = useRef<string | null>(null);
+  const lastAttemptRef = useRef<{ digest: string | null; at: number }>({
+    digest: null,
+    at: 0,
+  });
 
   useEffect(() => {
-    let cancelled = false;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
+  useEffect(() => {
     const runSync = (inputConversation: StudioConversationTurn[]) => {
-      const nextLatestPrompt = inputConversation
-        .filter((message) => message.role === "user")
-        .at(-1)?.text;
+      const nextLatestPrompt = getLatestUserPrompt(inputConversation);
       if (!nextLatestPrompt) return;
 
-      const nextConversationDigest = inputConversation
-        .map((message) => `${message.role}:${message.text}`)
-        .join("\n---\n");
-      const requestDigest = `${nextLatestPrompt}\n${nextConversationDigest}\n${materialsDigest}`;
-      if (previousDigestRef.current === requestDigest) return;
-      previousDigestRef.current = requestDigest;
+      if (
+        latestPrompt !== nextLatestPrompt ||
+        !sameConversation(persistedConversation, inputConversation)
+      ) {
+        setSyncContext({
+          latestPrompt: nextLatestPrompt,
+          conversation: inputConversation,
+        });
+      }
 
-      startSync();
+      const requestDigest = [nextLatestPrompt, materialsDigest].join("\n---\n");
+      if (lastCompletedDigestRef.current === requestDigest) return;
+      if (inFlightDigestRef.current === requestDigest) return;
+
+      const now = Date.now();
+      if (
+        lastAttemptRef.current.digest === requestDigest &&
+        now - lastAttemptRef.current.at < 4000
+      ) {
+        return;
+      }
+
+      lastAttemptRef.current = {
+        digest: requestDigest,
+        at: now,
+      };
+      inFlightDigestRef.current = requestDigest;
+
+      const hasPendingArtifacts = (
+        Object.keys(artifacts) as ArtifactTab[]
+      ).some((tab) => artifacts[tab].status === "generating");
+
+      if (!isSyncing && !hasPendingArtifacts) {
+        startSync();
+      }
 
       const requestBody: StudioArtifactRequest = {
         latestPrompt: nextLatestPrompt,
+        projectId: currentProjectId || undefined,
         conversation: inputConversation,
         intentDraft,
         materials,
@@ -199,40 +172,85 @@ export const StudioSyncBridge = () => {
           return (await response.json()) as StudioArtifactResponse;
         })
         .then((payload) => {
-          if (cancelled) return;
+          if (!mountedRef.current) return;
+          inFlightDigestRef.current = null;
+
+          const allReady = (
+            Object.values(
+              payload.artifacts,
+            ) as StudioArtifactResponse["artifacts"][ArtifactTab][]
+          ).every((artifact) => artifact.status === "ready");
+
+          if (allReady) {
+            lastCompletedDigestRef.current = requestDigest;
+          } else if (lastCompletedDigestRef.current === requestDigest) {
+            lastCompletedDigestRef.current = null;
+          }
+
           applyArtifactResponse(payload);
         })
         .catch(() => {
-          if (cancelled) return;
+          if (!mountedRef.current) return;
+          inFlightDigestRef.current = null;
           syncFailed(
-            "\u9884\u89c8\u670d\u52a1\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u540e\u7aef\u63a5\u5165\u540e\u53ef\u5728\u6b64\u8fd4\u56de\u7ed3\u6784\u5316\u8bfe\u4ef6\u7ed3\u679c\u3002",
+            "预览服务暂时不可用，后端接入后可在此返回结构化课件结果。",
           );
         });
     };
 
     const tick = () => {
       const domConversation = readConversationFromDom();
-      const betterConversation = pickBetterConversation(
-        conversation,
-        domConversation,
-      );
-      runSync(betterConversation);
+      const hasGeneratingArtifacts = (
+        Object.keys(artifacts) as ArtifactTab[]
+      ).some((tab) => artifacts[tab].status === "generating");
+
+      if (domConversation.length > 0) {
+        runSync(domConversation);
+        return;
+      }
+
+      if (hasGeneratingArtifacts && latestPrompt.trim().length > 0) {
+        const fallbackConversation =
+          persistedConversation.length > 0
+            ? persistedConversation
+            : [
+                {
+                  role: "user",
+                  text: latestPrompt,
+                } satisfies StudioConversationTurn,
+              ];
+        runSync(fallbackConversation);
+        return;
+      }
+
+      if (!latestPrompt.trim()) {
+        lastCompletedDigestRef.current = null;
+        inFlightDigestRef.current = null;
+        lastAttemptRef.current = {
+          digest: null,
+          at: 0,
+        };
+      }
     };
 
     tick();
     const timer = window.setInterval(tick, 1200);
 
     return () => {
-      cancelled = true;
       window.clearInterval(timer);
     };
   }, [
     activeTab,
+    artifacts,
     applyArtifactResponse,
-    conversation,
     intentDraft,
+    isSyncing,
+    currentProjectId,
+    latestPrompt,
     materials,
     materialsDigest,
+    persistedConversation,
+    setSyncContext,
     startSync,
     syncFailed,
   ]);

@@ -55,6 +55,12 @@ export type PreviewSlide = {
   html: string;
 };
 
+export type ArtifactDownload = {
+  fileName: string;
+  contentType: string;
+  localPath?: string;
+};
+
 export type VideoStoryboardScene = {
   id: string;
   title: string;
@@ -75,6 +81,7 @@ export type ArtifactPreview = {
   slides: PreviewSlide[];
   storyboard: VideoStoryboardScene[];
   previewHtml?: string;
+  download?: ArtifactDownload;
 };
 
 export type StudioArtifacts = Record<ArtifactTab, ArtifactPreview>;
@@ -86,6 +93,7 @@ export type StudioConversationTurn = {
 
 export type StudioArtifactRequest = {
   latestPrompt: string;
+  projectId?: string;
   conversation: StudioConversationTurn[];
   intentDraft: IntentDraft;
   materials: Array<
@@ -105,6 +113,7 @@ export type StudioArtifactRequest = {
 };
 
 export type StudioArtifactResponse = {
+  projectId?: string;
   intentDraft: IntentDraft;
   artifacts: StudioArtifacts;
   summary: string;

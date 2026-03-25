@@ -20,7 +20,7 @@ import {
   PanelLeftOpen,
   Sparkles,
 } from "lucide-react";
-import { useComposer, useComposerRuntime } from "@assistant-ui/react";
+import { useComposerRuntime } from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -103,13 +103,13 @@ export const PreviewWorkbench = () => {
   const structureViewportRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPreviewSidebarOpen, setIsPreviewSidebarOpen] = useState(true);
+  const [composerText, setComposerText] = useState("");
   const [structureScrollbar, setStructureScrollbar] = useState({
     visible: false,
     thumbHeight: 32,
     thumbTop: 0,
   });
-  const composerRuntime = useComposerRuntime();
-  const composerText = useComposer((state) => state.text);
+  const composerRuntime = useComposerRuntime({ optional: true });
   const activeArtifact = useStudioStore((state) => state.activeArtifact);
   const selectedNodeIds = useStudioStore((state) => state.selectedNodeIds);
   const artifacts = useStudioStore((state) => state.artifacts);
@@ -166,12 +166,28 @@ export const PreviewWorkbench = () => {
       : template;
     const currentText = composerText.trim();
 
+    if (!composerRuntime) return;
+
     composerRuntime.setText(
       currentText ? `${currentText}\n${message}` : message,
     );
   };
 
   const PanelIcon = panelIcons[activeArtifact];
+
+  useEffect(() => {
+    if (!composerRuntime) {
+      setComposerText("");
+      return;
+    }
+
+    const syncComposerText = () => {
+      setComposerText(composerRuntime.getState().text ?? "");
+    };
+
+    syncComposerText();
+    return composerRuntime.subscribe(syncComposerText);
+  }, [composerRuntime]);
 
   const updateStructureScrollbar = useCallback(() => {
     const viewport = structureViewportRef.current;

@@ -1,6 +1,7 @@
-﻿"use client";
+"use client";
 
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type {
   ArtifactPreview,
   ArtifactTab,
@@ -8,6 +9,7 @@ import type {
   MaterialRole,
   StudioArtifactResponse,
   StudioArtifacts,
+  StudioConversationTurn,
   StudioMaterial,
 } from "./studio-contract";
 
@@ -89,6 +91,9 @@ const createInitialWorkspaceState = () => ({
   intentDraft: createEmptyIntentDraft(),
   materials: [] as StudioMaterial[],
   artifacts: createIdleArtifacts(),
+  currentProjectId: "",
+  latestPrompt: "",
+  conversation: [] as StudioConversationTurn[],
 });
 
 type StudioState = {
@@ -99,8 +104,16 @@ type StudioState = {
   intentDraft: IntentDraft;
   materials: StudioMaterial[];
   artifacts: StudioArtifacts;
+  currentProjectId: string;
+  latestPrompt: string;
+  conversation: StudioConversationTurn[];
   setActiveArtifact(tab: ArtifactTab): void;
   setSelectedNode(tab: ArtifactTab, nodeId: string): void;
+  setCurrentProjectId(projectId: string): void;
+  setSyncContext(context: {
+    latestPrompt: string;
+    conversation: StudioConversationTurn[];
+  }): void;
   startSync(): void;
   syncFailed(message: string): void;
   applyArtifactResponse(response: StudioArtifactResponse): void;
@@ -112,110 +125,143 @@ type StudioState = {
   resetWorkspace(): void;
 };
 
-export const useStudioStore = create<StudioState>((set) => ({
-  ...createInitialWorkspaceState(),
-  setActiveArtifact: (tab) => set({ activeArtifact: tab }),
-  setSelectedNode: (tab, nodeId) =>
-    set((state) => ({
-      selectedNodeIds: {
-        ...state.selectedNodeIds,
-        [tab]: nodeId,
-      },
-    })),
-  startSync: () =>
-    set((state) => ({
-      isSyncing: true,
-      artifacts: {
-        "lesson-plan": toGeneratingArtifact(state.artifacts["lesson-plan"]),
-        ppt: toGeneratingArtifact(state.artifacts.ppt),
-        video: toGeneratingArtifact(state.artifacts.video),
-        word: toGeneratingArtifact(state.artifacts.word),
-      },
-    })),
-  syncFailed: (message) =>
-    set((state) => ({
-      isSyncing: false,
-      previewSummary: message,
-      artifacts: {
-        "lesson-plan": {
-          ...state.artifacts["lesson-plan"],
-          status: "error",
-        },
-        ppt: {
-          ...state.artifacts.ppt,
-          status: "error",
-        },
-        video: {
-          ...state.artifacts.video,
-          status: "error",
-        },
-        word: {
-          ...state.artifacts.word,
-          status: "error",
-        },
-      },
-    })),
-  applyArtifactResponse: (response) =>
-    set((state) => {
-      const selectedNodeIds = { ...state.selectedNodeIds };
+export const useStudioStore = create<StudioState>()(
+  persist(
+    (set) => ({
+      ...createInitialWorkspaceState(),
+      setActiveArtifact: (tab) => set({ activeArtifact: tab }),
+      setSelectedNode: (tab, nodeId) =>
+        set((state) => ({
+          selectedNodeIds: {
+            ...state.selectedNodeIds,
+            [tab]: nodeId,
+          },
+        })),
+      setCurrentProjectId: (projectId) => set({ currentProjectId: projectId }),
+      setSyncContext: ({ latestPrompt, conversation }) =>
+        set({
+          latestPrompt,
+          conversation,
+        }),
+      startSync: () =>
+        set((state) => ({
+          isSyncing: true,
+          artifacts: {
+            "lesson-plan": toGeneratingArtifact(state.artifacts["lesson-plan"]),
+            ppt: toGeneratingArtifact(state.artifacts.ppt),
+            video: toGeneratingArtifact(state.artifacts.video),
+            word: toGeneratingArtifact(state.artifacts.word),
+          },
+        })),
+      syncFailed: (message) =>
+        set((state) => ({
+          isSyncing: false,
+          previewSummary: message,
+          artifacts: {
+            "lesson-plan": {
+              ...state.artifacts["lesson-plan"],
+              status: "error",
+            },
+            ppt: {
+              ...state.artifacts.ppt,
+              status: "error",
+            },
+            video: {
+              ...state.artifacts.video,
+              status: "error",
+            },
+            word: {
+              ...state.artifacts.word,
+              status: "error",
+            },
+          },
+        })),
+      applyArtifactResponse: (response) =>
+        set((state) => {
+          const selectedNodeIds = { ...state.selectedNodeIds };
 
-      for (const tab of Object.keys(response.artifacts) as ArtifactTab[]) {
-        const artifact = response.artifacts[tab];
-        const existingSelection = state.selectedNodeIds[tab];
-        const availableNodeIds = [
-          ...artifact.sections.map((item) => item.id),
-          ...artifact.slides.map((item) => item.id),
-          ...artifact.storyboard.map((item) => item.id),
-        ];
+          for (const tab of Object.keys(response.artifacts) as ArtifactTab[]) {
+            const artifact = response.artifacts[tab];
+            const existingSelection = state.selectedNodeIds[tab];
+            const availableNodeIds = [
+              ...artifact.sections.map((item) => item.id),
+              ...artifact.slides.map((item) => item.id),
+              ...artifact.storyboard.map((item) => item.id),
+            ];
 
-        if (existingSelection && availableNodeIds.includes(existingSelection)) {
-          selectedNodeIds[tab] = existingSelection;
-          continue;
-        }
+            if (
+              existingSelection &&
+              availableNodeIds.includes(existingSelection)
+            ) {
+              selectedNodeIds[tab] = existingSelection;
+              continue;
+            }
 
-        selectedNodeIds[tab] =
-          artifact.sections[0]?.id ??
-          artifact.slides[0]?.id ??
-          artifact.storyboard[0]?.id;
-      }
+            selectedNodeIds[tab] =
+              artifact.sections[0]?.id ??
+              artifact.slides[0]?.id ??
+              artifact.storyboard[0]?.id;
+          }
 
-      return {
-        isSyncing: false,
-        previewSummary: response.summary,
-        intentDraft: response.intentDraft,
-        artifacts: response.artifacts,
-        selectedNodeIds,
-      };
+          return {
+            isSyncing: false,
+            previewSummary: response.summary,
+            currentProjectId: response.projectId ?? state.currentProjectId,
+            intentDraft: response.intentDraft,
+            artifacts: response.artifacts,
+            selectedNodeIds,
+          };
+        }),
+      addMaterial: (material) =>
+        set((state) => ({
+          materials: [material, ...state.materials],
+        })),
+      updateMaterialRole: (id, role) =>
+        set((state) => ({
+          materials: state.materials.map((material) =>
+            material.id === id ? { ...material, role } : material,
+          ),
+        })),
+      updateMaterialKnowledgePoints: (id, points) =>
+        set((state) => ({
+          materials: state.materials.map((material) =>
+            material.id === id
+              ? { ...material, linkedKnowledgePoints: points }
+              : material,
+          ),
+        })),
+      updateMaterialNote: (id, note) =>
+        set((state) => ({
+          materials: state.materials.map((material) =>
+            material.id === id ? { ...material, note } : material,
+          ),
+        })),
+      removeMaterial: (id) =>
+        set((state) => ({
+          materials: state.materials.filter((material) => material.id !== id),
+        })),
+      resetWorkspace: () => set(createInitialWorkspaceState()),
     }),
-  addMaterial: (material) =>
-    set((state) => ({
-      materials: [material, ...state.materials],
-    })),
-  updateMaterialRole: (id, role) =>
-    set((state) => ({
-      materials: state.materials.map((material) =>
-        material.id === id ? { ...material, role } : material,
-      ),
-    })),
-  updateMaterialKnowledgePoints: (id, points) =>
-    set((state) => ({
-      materials: state.materials.map((material) =>
-        material.id === id
-          ? { ...material, linkedKnowledgePoints: points }
-          : material,
-      ),
-    })),
-  updateMaterialNote: (id, note) =>
-    set((state) => ({
-      materials: state.materials.map((material) =>
-        material.id === id ? { ...material, note } : material,
-      ),
-    })),
-  removeMaterial: (id) =>
-    set((state) => ({
-      materials: state.materials.filter((material) => material.id !== id),
-    })),
-  resetWorkspace: () => set(createInitialWorkspaceState()),
-}));
+    {
+      name: "teaching-studio-workspace",
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        activeArtifact: state.activeArtifact,
+        selectedNodeIds: state.selectedNodeIds,
+        previewSummary: state.previewSummary,
+        intentDraft: state.intentDraft,
+        materials: state.materials,
+        artifacts: state.artifacts,
+        currentProjectId: state.currentProjectId,
+        latestPrompt: state.latestPrompt,
+        conversation: state.conversation,
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        state.isSyncing = false;
+      },
+    },
+  ),
+);
 
 export { createEmptyIntentDraft };

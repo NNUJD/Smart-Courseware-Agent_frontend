@@ -26,6 +26,7 @@ import { Reasoning } from "@/components/assistant-ui/reasoning";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { useStudioStore } from "@/lib/studio-store";
 import { cn } from "@/lib/utils";
 import {
   ActionBarPrimitive,
@@ -110,6 +111,43 @@ export const Thread: FC = () => {
 };
 
 const ThreadWelcome: FC = () => {
+  const persistedConversation = useStudioStore((state) => state.conversation);
+
+  if (persistedConversation.length > 0) {
+    return (
+      <div className="mx-auto flex h-full w-full max-w-(--thread-max-width) flex-1 flex-col px-2 pt-2 pb-4">
+        <div className="inline-flex w-fit items-center gap-2 rounded-full border border-primary/30 bg-primary/5 px-3 py-1 text-primary text-xs">
+          已恢复上次会话内容
+        </div>
+        <div className="mt-4 flex flex-1 flex-col gap-3 overflow-y-auto pr-1">
+          {persistedConversation.map((message, index) => {
+            const isAssistant = message.role === "assistant";
+            return (
+              <div
+                key={`persisted-message-${index + 1}`}
+                className={cn(
+                  "flex w-full",
+                  isAssistant ? "justify-start" : "justify-end",
+                )}
+              >
+                <div
+                  className={cn(
+                    "max-w-[88%] whitespace-pre-wrap rounded-[24px] px-4 py-3 text-sm leading-7 shadow-sm",
+                    isAssistant
+                      ? "border border-border/60 bg-background/85 text-foreground"
+                      : "bg-primary text-primary-foreground",
+                  )}
+                >
+                  {message.text}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto flex h-full w-full max-w-(--thread-max-width) flex-1 flex-col justify-between px-2 pt-2 pb-2">
       <div className="inline-flex w-fit items-center gap-2 rounded-full border border-amber-300/60 bg-amber-50 px-3 py-1 text-amber-900 text-xs">

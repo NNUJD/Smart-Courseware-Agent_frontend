@@ -1,4 +1,5 @@
-﻿import type {
+﻿import { createHash } from "node:crypto";
+import type {
   ArtifactTab,
   IntentDraft,
   PreviewSection,
@@ -8,14 +9,77 @@
   StudioArtifacts,
   VideoStoryboardScene,
 } from "@/lib/studio-contract";
+import {
+  buildStableProjectId,
+  generateBackendArtifactResponse,
+  resolveExistingBackendArtifactResponse,
+  shouldGenerateCourseware,
+} from "../_lib/courseware";
 
-const fallbackKnowledgePoints = ["概念导入", "核心知识讲解", "案例练习"];
+export const maxDuration = 1800;
+
+const emptyIntentDraft: IntentDraft = {
+  teachingGoal: "",
+  audience: "",
+  duration: "",
+  knowledgePoints: [],
+  logicSequence: [],
+  keyDifficulties: [],
+  outputStyle: "",
+  finalRequirement: "",
+  missingFields: [],
+  confirmed: false,
+};
+
+type GenerationTask = {
+  status: "pending" | "ready" | "error";
+  response?: StudioArtifactResponse;
+  error?: string;
+  startedAt: number;
+  updatedAt: number;
+};
+
+const generationTasks = new Map<string, GenerationTask>();
+
+const fallbackKnowledgePoints = ["教学主题", "核心知识", "课堂应用"];
+
+const genericKnowledgePointPatterns = [
+  /^概念导入$/,
+  /^核心知识讲解$/,
+  /^案例练习$/,
+  /^Prompt/i,
+  /^user_message$/i,
+  /^recent_his/i,
+  /^要区分观点和证据的不同$/,
+];
 
 const splitKeywords = (input: string) =>
   input
     .split(/[，,。；;\n]/)
     .map((value) => value.trim())
     .filter(Boolean);
+
+const extractQuotedTopic = (input: string) => {
+  const match = input.match(/《([^》]{1,20})》/);
+  return match?.[1]?.trim() ?? "";
+};
+
+const normalizeKnowledgePoints = (items: string[]) =>
+  Array.from(
+    new Set(
+      items
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .filter(
+          (item) =>
+            !genericKnowledgePointPatterns.some((pattern) =>
+              pattern.test(item),
+            ),
+        )
+        .filter((item) => item.length >= 2)
+        .filter((item) => !/^[a-zA-Z0-9_\-\s|:：。、，]+$/.test(item)),
+    ),
+  );
 
 const extractBetween = (input: string, keywords: string[]) => {
   for (const keyword of keywords) {
@@ -84,10 +148,11 @@ const getLatestAssistantDraft = (
   return "";
 };
 
-const getLatestConversationText = (
+const getLatestUserConversationText = (
   conversation: StudioArtifactRequest["conversation"],
 ) =>
   conversation
+    .filter((turn) => turn.role === "user")
     .slice(-8)
     .map((turn) => turn.text.trim())
     .filter(Boolean)
@@ -151,12 +216,13 @@ const buildAssistantBackedLessonSections = (
 
 const buildIntentDraft = (request: StudioArtifactRequest): IntentDraft => {
   const latestPrompt = request.latestPrompt;
-  const conversationText = getLatestConversationText(request.conversation);
-  const existing = request.intentDraft;
+  const conversationText = getLatestUserConversationText(request.conversation);
+  const existing = request.intentDraft ?? emptyIntentDraft;
   const materialKnowledge = request.materials.flatMap(
     (material) => material.linkedKnowledgePoints,
   );
   const intentSourceText = `${latestPrompt}\n${conversationText}`;
+  const quotedTopic = extractQuotedTopic(intentSourceText);
 
   const teachingGoal =
     existing.teachingGoal ||
@@ -166,16 +232,29 @@ const buildIntentDraft = (request: StudioArtifactRequest): IntentDraft => {
   const duration = existing.duration || inferDuration(intentSourceText);
   const outputStyle = existing.outputStyle || inferStyle(intentSourceText);
 
-  const detectedKnowledge = mergeUnique(
-    existing.knowledgePoints,
-    materialKnowledge,
-    splitKeywords(
-      extractBetween(intentSourceText, ["知识点", "重点内容", "围绕", "讲解"]),
+  const detectedKnowledge = normalizeKnowledgePoints(
+    mergeUnique(
+      quotedTopic ? [quotedTopic] : [],
+      existing.knowledgePoints,
+      materialKnowledge,
+      splitKeywords(
+        extractBetween(intentSourceText, [
+          "知识点",
+          "重点内容",
+          "围绕",
+          "讲解",
+        ]),
+      ),
     ),
   );
 
   const knowledgePoints =
-    detectedKnowledge.length > 0 ? detectedKnowledge : fallbackKnowledgePoints;
+    detectedKnowledge.length > 0
+      ? detectedKnowledge
+      : normalizeKnowledgePoints([
+          quotedTopic || "",
+          ...fallbackKnowledgePoints,
+        ]).slice(0, 3);
 
   const logicSequence = mergeUnique(
     existing.logicSequence,
@@ -395,10 +474,159 @@ const buildSummary = (
   }`;
 };
 
+const buildRequestDigest = (
+  request: StudioArtifactRequest,
+  intentDraft: IntentDraft,
+  assistantDraft: string,
+) => {
+  const hash = createHash("sha1");
+  hash.update(
+    JSON.stringify({
+      latestPrompt: request.latestPrompt,
+      materials: request.materials,
+      topic: intentDraft.knowledgePoints.slice(0, 2).join("、"),
+      audience: intentDraft.audience,
+      duration: intentDraft.duration,
+      outputStyle: intentDraft.outputStyle,
+    }),
+  );
+  return hash.digest("hex");
+};
+
+const toGeneratingArtifacts = (
+  artifacts: StudioArtifacts,
+): StudioArtifacts => ({
+  "lesson-plan": {
+    ...artifacts["lesson-plan"],
+    status: "generating",
+  },
+  ppt: {
+    ...artifacts.ppt,
+    status: "generating",
+  },
+  video: {
+    ...artifacts.video,
+    status: "generating",
+  },
+  word: {
+    ...artifacts.word,
+    status: "generating",
+  },
+});
+
+const buildGeneratingResponse = (
+  request: StudioArtifactRequest,
+  intentDraft: IntentDraft,
+  assistantDraft: string,
+): StudioArtifactResponse => ({
+  projectId:
+    request.projectId ||
+    buildStableProjectId(request, intentDraft, assistantDraft).projectId,
+  intentDraft,
+  artifacts: toGeneratingArtifacts(
+    createArtifacts(intentDraft, assistantDraft),
+  ),
+  summary: `已提交真实后端课件生成任务，正在持续生成 ${request.activeTab === "ppt" ? "PPT" : tabLabels[request.activeTab]} 与配套文件，请稍候自动同步完成状态。`,
+});
+
+const ensureGenerationTask = ({
+  digest,
+  request,
+  intentDraft,
+  assistantDraft,
+}: {
+  digest: string;
+  request: StudioArtifactRequest;
+  intentDraft: IntentDraft;
+  assistantDraft: string;
+}) => {
+  const existing = generationTasks.get(digest);
+  if (existing) {
+    existing.updatedAt = Date.now();
+    return existing;
+  }
+
+  const task: GenerationTask = {
+    status: "pending",
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  generationTasks.set(digest, task);
+
+  void generateBackendArtifactResponse({
+    request,
+    intentDraft,
+    assistantDraft,
+  })
+    .then((response) => {
+      task.status = "ready";
+      task.response = response;
+      task.updatedAt = Date.now();
+    })
+    .catch((error) => {
+      task.status = "error";
+      task.error =
+        error instanceof Error ? error.message : "backend_generation_failed";
+      task.updatedAt = Date.now();
+    });
+
+  return task;
+};
+
 export async function POST(request: Request) {
-  const body = (await request.json()) as StudioArtifactRequest;
+  const rawBody = (await request.json()) as Partial<StudioArtifactRequest> & {
+    activeArtifact?: ArtifactTab;
+  };
+  const body: StudioArtifactRequest = {
+    latestPrompt: rawBody.latestPrompt ?? "",
+    projectId: rawBody.projectId,
+    conversation: rawBody.conversation ?? [],
+    intentDraft: rawBody.intentDraft ?? emptyIntentDraft,
+    materials: rawBody.materials ?? [],
+    activeTab: rawBody.activeTab ?? rawBody.activeArtifact ?? "ppt",
+  };
   const intentDraft = buildIntentDraft(body);
   const assistantDraft = getLatestAssistantDraft(body.conversation);
+
+  if (shouldGenerateCourseware(body, intentDraft, assistantDraft)) {
+    const existingResponse = await resolveExistingBackendArtifactResponse({
+      request: body,
+      intentDraft,
+      assistantDraft,
+    });
+
+    if (existingResponse) {
+      return Response.json(existingResponse);
+    }
+
+    const digest = buildRequestDigest(body, intentDraft, assistantDraft);
+    const task = ensureGenerationTask({
+      digest,
+      request: body,
+      intentDraft,
+      assistantDraft,
+    });
+
+    if (task.status === "ready" && task.response) {
+      return Response.json(task.response);
+    }
+
+    if (task.status === "error") {
+      return Response.json(
+        {
+          error: "backend_courseware_generation_failed",
+          detail: task.error ?? "backend_generation_failed",
+        },
+        { status: 502 },
+      );
+    }
+
+    return Response.json(
+      buildGeneratingResponse(body, intentDraft, assistantDraft),
+    );
+  }
+
   const artifacts = createArtifacts(intentDraft, assistantDraft);
 
   const response: StudioArtifactResponse = {

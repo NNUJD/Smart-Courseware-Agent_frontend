@@ -240,9 +240,25 @@ export const useAISDKRuntime = <UI_MESSAGE extends UIMessage = UIMessage>(
       const createMessage = (
         customToCreateMessage ?? toCreateMessage
       )<UI_MESSAGE>(message);
-      await chatHelpers.sendMessage(createMessage, {
-        metadata: message.runConfig,
-      });
+      try {
+        await chatHelpers.sendMessage(createMessage, {
+          metadata: message.runConfig,
+        });
+      } catch (error) {
+        const detail =
+          error instanceof Error ? error.message : String(error ?? "");
+        if (
+          detail.includes("reading 'state'") ||
+          detail.includes("activeResponse")
+        ) {
+          console.warn(
+            "assistant-ui sendMessage recovered from transient chat state error",
+            error,
+          );
+          return;
+        }
+        throw error;
+      }
     },
     onEdit: async (message) => {
       const newMessages = sliceMessagesUntil(
@@ -254,9 +270,25 @@ export const useAISDKRuntime = <UI_MESSAGE extends UIMessage = UIMessage>(
       const createMessage = (
         customToCreateMessage ?? toCreateMessage
       )<UI_MESSAGE>(message);
-      await chatHelpers.sendMessage(createMessage, {
-        metadata: message.runConfig,
-      });
+      try {
+        await chatHelpers.sendMessage(createMessage, {
+          metadata: message.runConfig,
+        });
+      } catch (error) {
+        const detail =
+          error instanceof Error ? error.message : String(error ?? "");
+        if (
+          detail.includes("reading 'state'") ||
+          detail.includes("activeResponse")
+        ) {
+          console.warn(
+            "assistant-ui edit recovered from transient chat state error",
+            error,
+          );
+          return;
+        }
+        throw error;
+      }
     },
     onReload: async (parentId: string | null, config) => {
       const newMessages = sliceMessagesUntil(chatHelpers.messages, parentId);

@@ -23,11 +23,16 @@ export const Assistant = () => {
     [],
   );
   const attachmentAdapter = useMemo(() => new TeachingAttachmentAdapter(), []);
+  const transport = useMemo(
+    () =>
+      new AssistantChatTransport({
+        api: "/api/chat",
+      }),
+    [],
+  );
 
   const runtime = useChatRuntime({
-    transport: new AssistantChatTransport({
-      api: "/api/chat",
-    }),
+    transport,
     adapters: {
       dictation: dictationAdapter,
       attachments: attachmentAdapter,

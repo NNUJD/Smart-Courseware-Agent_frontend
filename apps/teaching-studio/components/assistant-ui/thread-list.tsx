@@ -27,6 +27,8 @@ import {
 } from "@assistant-ui/react";
 
 const UNTITLED_TASK = "未命名任务";
+const WORKSPACE_STORAGE_KEY = "teaching-studio-workspace";
+const WELCOME_SEEN_KEY = "teaching-studio-welcome-seen";
 
 export const ThreadList: FC = () => {
   const isLoading = useThreadList((state) => state.isLoading);
@@ -43,7 +45,6 @@ export const ThreadList: FC = () => {
 };
 
 const ThreadListNew: FC = () => {
-  const assistantRuntime = useAssistantRuntime();
   const threadRuntime = useThreadRuntime();
   const resetWorkspace = useStudioStore((state) => state.resetWorkspace);
   const [isResetting, setIsResetting] = useState(false);
@@ -56,8 +57,12 @@ const ThreadListNew: FC = () => {
         threadRuntime.cancelRun();
       }
 
-      await assistantRuntime.switchToNewThread();
       resetWorkspace();
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+        window.sessionStorage.removeItem(WELCOME_SEEN_KEY);
+      }
+      window.location.reload();
     } finally {
       setIsResetting(false);
     }

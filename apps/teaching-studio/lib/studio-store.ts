@@ -78,10 +78,69 @@ const createIdleArtifacts = (): StudioArtifacts => ({
 const toGeneratingArtifact = (artifact: ArtifactPreview): ArtifactPreview => ({
   ...artifact,
   status: "generating",
+  sections: [],
+  slides: [],
+  storyboard: [],
+  download: undefined,
 });
 
 const defaultPreviewSummary =
   "先通过多轮对话明确教学目标，再逐步生成教案、PPT、视频和讲义预览。";
+
+const sameConversation = (
+  left: StudioConversationTurn[],
+  right: StudioConversationTurn[],
+) => {
+  if (left.length !== right.length) return false;
+
+  return left.every(
+    (item, index) =>
+      item.role === right[index]?.role && item.text === right[index]?.text,
+  );
+};
+
+const mergeConversationHistory = (
+  previous: StudioConversationTurn[],
+  incoming: StudioConversationTurn[],
+) => {
+  if (previous.length === 0) return incoming;
+  if (incoming.length === 0) return previous;
+  if (sameConversation(previous, incoming)) return incoming;
+
+  let overlap = 0;
+
+  const maxOverlap = Math.min(previous.length, incoming.length);
+  for (let size = maxOverlap; size > 0; size -= 1) {
+    const previousSuffix = previous.slice(previous.length - size);
+    const incomingPrefix = incoming.slice(0, size);
+    if (sameConversation(previousSuffix, incomingPrefix)) {
+      overlap = size;
+      break;
+    }
+  }
+
+  if (overlap > 0) {
+    return [...previous, ...incoming.slice(overlap)];
+  }
+
+  const previousPrompt = previous.at(-1)?.text ?? "";
+  const incomingPrompt = incoming.at(-1)?.text ?? "";
+  if (
+    previous.length >= incoming.length &&
+    incoming.every(
+      (item, index) =>
+        item.role === previous[index]?.role && item.text === previous[index]?.text,
+    )
+  ) {
+    return previous;
+  }
+
+  if (previousPrompt && incomingPrompt && previousPrompt === incomingPrompt) {
+    return previous;
+  }
+
+  return incoming;
+};
 
 const createInitialWorkspaceState = () => ({
   activeArtifact: "lesson-plan" as ArtifactTab,
@@ -139,9 +198,39 @@ export const useStudioStore = create<StudioState>()(
         })),
       setCurrentProjectId: (projectId) => set({ currentProjectId: projectId }),
       setSyncContext: ({ latestPrompt, conversation }) =>
-        set({
-          latestPrompt,
-          conversation,
+        set((state) => {
+          const mergedConversation = mergeConversationHistory(
+            state.conversation,
+            conversation,
+          );
+          const samePrompt = state.latestPrompt === latestPrompt;
+          const sameThread = sameConversation(
+            state.conversation,
+            mergedConversation,
+          );
+
+          if (samePrompt) {
+            if (sameThread) {
+              return {
+                latestPrompt,
+                conversation: mergedConversation,
+              };
+            }
+
+            return {
+              latestPrompt,
+              conversation: mergedConversation,
+            };
+          }
+
+          return {
+            latestPrompt,
+            conversation: mergedConversation,
+            currentProjectId: "",
+            selectedNodeIds: {},
+            previewSummary: defaultPreviewSummary,
+            artifacts: createIdleArtifacts(),
+          };
         }),
       startSync: () =>
         set((state) => ({

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type {
   ArtifactPreview,
   ArtifactTab,
@@ -24,6 +25,20 @@ type ExportRequestBody = {
 
 const parseDownloadCandidate = (artifact: ArtifactPreview | undefined) =>
   artifact?.download?.localPath ? artifact.download : undefined;
+
+const inferContentType = (targetPath: string) => {
+  const lowered = targetPath.toLowerCase();
+  if (lowered.endsWith(".pptx")) {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
+  if (lowered.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (lowered.endsWith(".pdf")) {
+    return "application/pdf";
+  }
+  return "application/octet-stream";
+};
 
 const resolveExportCandidate = (
   activeArtifact: ArtifactTab | undefined,
@@ -111,11 +126,15 @@ export async function POST(request: Request) {
   if (candidate?.localPath) {
     try {
       const fileBuffer = await readFile(candidate.localPath);
+      const fileName =
+        candidate.fileName?.trim() || path.basename(candidate.localPath);
+      const contentType =
+        candidate.contentType?.trim() || inferContentType(candidate.localPath);
 
       return new Response(fileBuffer, {
         headers: {
-          "Content-Type": candidate.contentType,
-          "Content-Disposition": `attachment; filename="${candidate.fileName}"`,
+          "Content-Type": contentType,
+          "Content-Disposition": `attachment; filename="${fileName}"`,
         },
       });
     } catch {

@@ -11,13 +11,17 @@ import {
 } from "react";
 import {
   CheckCircle2,
+  Download,
+  ExternalLink,
   Expand,
   Film,
   FileText,
   LayoutTemplate,
+  LoaderCircle,
   Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
+  Printer,
   Sparkles,
 } from "lucide-react";
 import { useComposerRuntime } from "@assistant-ui/react";
@@ -98,6 +102,17 @@ const withAdaptivePreviewMedia = (html: string) => {
   return `${style}${html}`;
 };
 
+const buildFilePreviewUrl = (localPath?: string) => {
+  if (!localPath) return null;
+  return `/api/studio/preview-file?path=${encodeURIComponent(localPath)}`;
+};
+
+const readFileNameFromDisposition = (header: string | null) => {
+  if (!header) return null;
+  const match = header.match(/filename=\"([^\"]+)\"/i);
+  return match?.[1] ?? null;
+};
+
 export const PreviewWorkbench = () => {
   const fullscreenRef = useRef<HTMLElement>(null);
   const structureViewportRef = useRef<HTMLDivElement>(null);
@@ -115,10 +130,43 @@ export const PreviewWorkbench = () => {
   const artifacts = useStudioStore((state) => state.artifacts);
   const isSyncing = useStudioStore((state) => state.isSyncing);
   const previewSummary = useStudioStore((state) => state.previewSummary);
+  const currentProjectId = useStudioStore((state) => state.currentProjectId);
+  const latestPrompt = useStudioStore((state) => state.latestPrompt);
+  const conversation = useStudioStore((state) => state.conversation);
+  const intentDraft = useStudioStore((state) => state.intentDraft);
+  const studioMaterials = useStudioStore((state) => state.materials);
   const setActiveArtifact = useStudioStore((state) => state.setActiveArtifact);
   const setSelectedNode = useStudioStore((state) => state.setSelectedNode);
+  const applyArtifactResponse = useStudioStore(
+    (state) => state.applyArtifactResponse,
+  );
+  const materials = useMemo(
+    () =>
+      studioMaterials.map((material) => ({
+        id: material.id,
+        name: material.name,
+        mimeType: material.mimeType,
+        size: material.size,
+        role: material.role,
+        linkedKnowledgePoints: material.linkedKnowledgePoints,
+        note: material.note,
+        parseSummary: material.parseSummary,
+      })),
+    [studioMaterials],
+  );
 
   const artifact = artifacts[activeArtifact];
+  const hasGeneratingArtifacts = useMemo(
+    () =>
+      artifactTabs.some((tab) => artifacts[tab].status === "generating") ||
+      artifactTabs.some(
+        (tab) =>
+          artifacts[tab].status === "ready" &&
+          !artifacts[tab].download?.localPath &&
+          (tab === "ppt" || tab === "lesson-plan" || tab === "word"),
+      ),
+    [artifacts],
+  );
   const listItems = useMemo(() => {
     if (artifact.slides.length > 0) {
       return artifact.slides.map((item) => ({
@@ -288,6 +336,73 @@ export const PreviewWorkbench = () => {
     return () =>
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
+
+  const hasAnyGeneratingArtifacts = useMemo(
+    () => artifactTabs.some((tab) => artifacts[tab].status === "generating"),
+    [artifacts],
+  );
+  const hasMissingDownloadPath = useMemo(
+    () =>
+      !artifacts.ppt.download?.localPath ||
+      !artifacts["lesson-plan"].download?.localPath ||
+      !artifacts.word.download?.localPath,
+    [artifacts],
+  );
+
+  useEffect(() => {
+    const shouldPollCurrentProject =
+      Boolean(currentProjectId) &&
+      (hasAnyGeneratingArtifacts || hasMissingDownloadPath);
+
+    if (!shouldPollCurrentProject || !currentProjectId) return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch("/api/studio/artifacts", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            latestPrompt,
+            projectId: currentProjectId,
+            conversation:
+              conversation.length > 0
+                ? conversation
+                : latestPrompt.trim().length > 0
+                  ? [{ role: "user", text: latestPrompt }]
+                  : [],
+            intentDraft,
+            materials,
+            activeTab: activeArtifact,
+          }),
+        });
+
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (cancelled) return;
+        applyArtifactResponse(payload);
+      } catch {
+        return;
+      }
+    }, 1200);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeArtifact,
+    applyArtifactResponse,
+    conversation,
+    currentProjectId,
+    hasAnyGeneratingArtifacts,
+    hasMissingDownloadPath,
+    intentDraft,
+    latestPrompt,
+    materials,
+  ]);
 
   useEffect(() => {
     if (!isPreviewSidebarOpen) return;
@@ -573,6 +688,183 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
   currentScene,
   expanded = false,
 }) => {
+  const filePreviewUrl = buildFilePreviewUrl(artifact.download?.localPath);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [isFileExporting, setIsFileExporting] = useState(false);
+  const activeArtifactFromStore = useStudioStore((state) => state.activeArtifact);
+  const artifacts = useStudioStore((state) => state.artifacts);
+  const materials = useStudioStore((state) => state.materials);
+  const intentDraft = useStudioStore((state) => state.intentDraft);
+  const currentProjectId = useStudioStore((state) => state.currentProjectId);
+  const latestPrompt = useStudioStore((state) => state.latestPrompt);
+  const conversation = useStudioStore((state) => state.conversation);
+
+  const handleDirectExport = useCallback(async () => {
+    setIsFileExporting(true);
+
+    try {
+      const response = await fetch("/api/studio/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          activeArtifact: activeArtifactFromStore,
+          projectId: currentProjectId || undefined,
+          intentDraft,
+          materials,
+          artifacts,
+          latestPrompt,
+          conversation,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("export_failed");
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download =
+        readFileNameFromDisposition(
+          response.headers.get("Content-Disposition"),
+        ) ?? artifact.downloadName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    } finally {
+      setIsFileExporting(false);
+    }
+  }, [
+    activeArtifactFromStore,
+    artifact.downloadName,
+    artifacts,
+    conversation,
+    currentProjectId,
+    intentDraft,
+    latestPrompt,
+    materials,
+  ]);
+
+  const handlePrintPreview = useCallback(() => {
+    iframeRef.current?.contentWindow?.focus();
+    iframeRef.current?.contentWindow?.print();
+  }, []);
+
+  if (
+    filePreviewUrl &&
+    (activeArtifact === "ppt" ||
+      activeArtifact === "lesson-plan" ||
+      activeArtifact === "word")
+  ) {
+    const fileTypeLabel =
+      activeArtifact === "ppt"
+        ? "PPT 成品"
+        : activeArtifact === "lesson-plan"
+          ? "教案成品"
+          : "讲义成品";
+
+    return (
+      <div
+        className={cn(
+          "flex h-full flex-col gap-3",
+          expanded ? "min-h-[78vh]" : "min-h-[560px]",
+        )}
+      >
+        <div className="relative flex-1 overflow-hidden rounded-[30px] border border-border/70 bg-[radial-gradient(circle_at_top,rgba(125,211,252,0.16),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.98))] shadow-sm">
+          <div className="border-border/60 border-b px-4 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-muted-foreground text-xs">真实文件预览</p>
+                <h3 className="font-semibold text-lg">{artifact.title}</h3>
+                <p className="mt-1 max-w-2xl text-muted-foreground text-sm">
+                  当前窗口展示的是已生成文件本身，和下载内容保持一致。你现在看到的就是最终导出的页面效果。
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700 text-xs">
+                  <CheckCircle2 className="size-3.5" />
+                  已生成完成
+                </span>
+                <span className="inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs">
+                  {artifact.downloadName}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <div className="inline-flex min-h-10 flex-1 items-center gap-2 rounded-2xl border border-border/60 bg-background/80 px-3 py-2 text-muted-foreground text-xs sm:max-w-[360px]">
+                <span className="rounded-full bg-secondary px-2 py-1 text-[11px]">
+                  {fileTypeLabel}
+                </span>
+                <span className="truncate">{artifact.downloadName}</span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-full"
+                onClick={() => void handleDirectExport()}
+                disabled={isFileExporting}
+              >
+                {isFileExporting ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+                下载文件
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-full"
+                onClick={handlePrintPreview}
+              >
+                <Printer className="size-4" />
+                打印预览
+              </Button>
+              <Button
+                asChild
+                type="button"
+                variant="outline"
+                className="rounded-full"
+              >
+                <Link href={filePreviewUrl} target="_blank" rel="noreferrer">
+                  <ExternalLink className="size-4" />
+                  新窗口查看
+                </Link>
+              </Button>
+            </div>
+        </div>
+
+        <div className="p-3">
+            <div className="mb-3 flex items-center gap-2 px-2">
+              <span className="size-2.5 rounded-full bg-rose-400/90" />
+              <span className="size-2.5 rounded-full bg-amber-400/90" />
+            <span className="size-2.5 rounded-full bg-emerald-400/90" />
+            <div className="ml-2 flex-1 rounded-full border border-border/60 bg-background/80 px-3 py-1 text-muted-foreground text-xs">
+              文件预览 · {artifact.downloadName}
+            </div>
+          </div>
+
+          <iframe
+            ref={iframeRef}
+            title={`${artifact.title}真实文件预览`}
+            src={filePreviewUrl}
+            className={cn(
+              "w-full rounded-[22px] border border-border/70 bg-white shadow-inner",
+              expanded ? "min-h-[70vh]" : "min-h-[480px]",
+            )}
+          />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (activeArtifact === "ppt" && currentSlide) {
     return (
       <div
@@ -675,11 +967,29 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
       )}
     >
       <div className="max-w-md">
-        <p className="font-medium">等待生成首版结果</p>
-        <p className="mt-2 text-muted-foreground text-sm leading-6">
-          当左侧完成教学目标、知识点、资料用途和产出风格的澄清后，右侧会显示可修改的教案、PPT、视频和
-          Word 预览。
-        </p>
+        {artifact.status === "generating" ? (
+          <>
+            <p className="font-medium">正在生成首版结果</p>
+            <p className="mt-2 text-muted-foreground text-sm leading-6">
+              当前任务已经提交到后端，正在生成 {artifact.title}。生成完成后，这里会自动切换到真实文件预览。
+            </p>
+          </>
+        ) : artifact.status === "error" ? (
+          <>
+            <p className="font-medium">生成暂时失败</p>
+            <p className="mt-2 text-muted-foreground text-sm leading-6">
+              这轮生成没有成功完成。你可以重新发起一次生成，或继续调整需求后再试。
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="font-medium">等待生成首版结果</p>
+            <p className="mt-2 text-muted-foreground text-sm leading-6">
+              当左侧完成教学目标、知识点、资料用途和产出风格的澄清后，右侧会显示可修改的教案、PPT、视频和
+              Word 预览。
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

@@ -52,6 +52,7 @@ const sameConversation = (
 
 export const StudioSyncBridge = () => {
   const mountedRef = useRef(true);
+  const pendingProjectIdRef = useRef<string | null>(null);
 
   const studioMaterials = useStudioStore((state) => state.materials);
   const materials = studioMaterials.map((material) => ({
@@ -72,6 +73,9 @@ export const StudioSyncBridge = () => {
   const currentProjectId = useStudioStore((state) => state.currentProjectId);
   const latestPrompt = useStudioStore((state) => state.latestPrompt);
   const persistedConversation = useStudioStore((state) => state.conversation);
+  const setCurrentProjectId = useStudioStore(
+    (state) => state.setCurrentProjectId,
+  );
   const setSyncContext = useStudioStore((state) => state.setSyncContext);
   const startSync = useStudioStore((state) => state.startSync);
   const syncFailed = useStudioStore((state) => state.syncFailed);
@@ -94,6 +98,20 @@ export const StudioSyncBridge = () => {
         .join("\n"),
     [materials],
   );
+  const artifactStatusDigest = useMemo(
+    () =>
+      (Object.keys(artifacts) as ArtifactTab[])
+        .map((tab) => `${tab}:${artifacts[tab].status}`)
+        .join("|"),
+    [artifacts],
+  );
+  const hasGeneratingArtifacts = useMemo(
+    () =>
+      (Object.keys(artifacts) as ArtifactTab[]).some(
+        (tab) => artifacts[tab].status === "generating",
+      ),
+    [artifacts],
+  );
 
   const lastCompletedDigestRef = useRef<string | null>(null);
   const inFlightDigestRef = useRef<string | null>(null);
@@ -112,18 +130,40 @@ export const StudioSyncBridge = () => {
     const runSync = (inputConversation: StudioConversationTurn[]) => {
       const nextLatestPrompt = getLatestUserPrompt(inputConversation);
       if (!nextLatestPrompt) return;
+      const isNewPrompt = latestPrompt !== nextLatestPrompt;
+      let projectIdForRequest =
+        pendingProjectIdRef.current || currentProjectId || undefined;
 
       if (
-        latestPrompt !== nextLatestPrompt ||
+        isNewPrompt ||
         !sameConversation(persistedConversation, inputConversation)
       ) {
         setSyncContext({
           latestPrompt: nextLatestPrompt,
           conversation: inputConversation,
         });
+        if (isNewPrompt) {
+          pendingProjectIdRef.current = `studio-${crypto
+            .randomUUID()
+            .replace(/-/g, "")
+            .slice(0, 13)}`;
+          projectIdForRequest = pendingProjectIdRef.current;
+          setCurrentProjectId(projectIdForRequest);
+        } else if (!projectIdForRequest) {
+          pendingProjectIdRef.current = `studio-${crypto
+            .randomUUID()
+            .replace(/-/g, "")
+            .slice(0, 13)}`;
+          projectIdForRequest = pendingProjectIdRef.current;
+          setCurrentProjectId(projectIdForRequest);
+        }
       }
 
-      const requestDigest = [nextLatestPrompt, materialsDigest].join("\n---\n");
+      const requestDigest = [
+        nextLatestPrompt,
+        projectIdForRequest ?? "",
+        materialsDigest,
+      ].join("\n---\n");
       if (lastCompletedDigestRef.current === requestDigest) return;
       if (inFlightDigestRef.current === requestDigest) return;
 
@@ -141,17 +181,13 @@ export const StudioSyncBridge = () => {
       };
       inFlightDigestRef.current = requestDigest;
 
-      const hasPendingArtifacts = (
-        Object.keys(artifacts) as ArtifactTab[]
-      ).some((tab) => artifacts[tab].status === "generating");
-
-      if (!isSyncing && !hasPendingArtifacts) {
+      if (!isSyncing && !hasGeneratingArtifacts) {
         startSync();
       }
 
       const requestBody: StudioArtifactRequest = {
         latestPrompt: nextLatestPrompt,
-        projectId: currentProjectId || undefined,
+        projectId: projectIdForRequest,
         conversation: inputConversation,
         intentDraft,
         materials,
@@ -174,6 +210,9 @@ export const StudioSyncBridge = () => {
         .then((payload) => {
           if (!mountedRef.current) return;
           inFlightDigestRef.current = null;
+          if (payload.projectId) {
+            pendingProjectIdRef.current = payload.projectId;
+          }
 
           const allReady = (
             Object.values(
@@ -200,10 +239,6 @@ export const StudioSyncBridge = () => {
 
     const tick = () => {
       const domConversation = readConversationFromDom();
-      const hasGeneratingArtifacts = (
-        Object.keys(artifacts) as ArtifactTab[]
-      ).some((tab) => artifacts[tab].status === "generating");
-
       if (domConversation.length > 0) {
         runSync(domConversation);
         return;
@@ -224,6 +259,7 @@ export const StudioSyncBridge = () => {
       }
 
       if (!latestPrompt.trim()) {
+        pendingProjectIdRef.current = null;
         lastCompletedDigestRef.current = null;
         inFlightDigestRef.current = null;
         lastAttemptRef.current = {
@@ -241,8 +277,9 @@ export const StudioSyncBridge = () => {
     };
   }, [
     activeTab,
-    artifacts,
     applyArtifactResponse,
+    artifactStatusDigest,
+    hasGeneratingArtifacts,
     intentDraft,
     isSyncing,
     currentProjectId,
@@ -250,6 +287,7 @@ export const StudioSyncBridge = () => {
     materials,
     materialsDigest,
     persistedConversation,
+    setCurrentProjectId,
     setSyncContext,
     startSync,
     syncFailed,

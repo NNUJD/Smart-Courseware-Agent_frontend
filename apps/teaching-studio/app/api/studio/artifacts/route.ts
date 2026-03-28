@@ -1,4 +1,6 @@
-﻿import { createHash } from "node:crypto";
+﻿import { createHash, randomUUID } from "node:crypto";
+import { access, mkdir, open, rm } from "node:fs/promises";
+import path from "node:path";
 import type {
   ArtifactTab,
   IntentDraft,
@@ -32,14 +34,25 @@ const emptyIntentDraft: IntentDraft = {
 };
 
 type GenerationTask = {
+  projectId: string;
   status: "pending" | "ready" | "error";
   response?: StudioArtifactResponse;
   error?: string;
   startedAt: number;
   updatedAt: number;
+  ownsLock?: boolean;
 };
 
 const generationTasks = new Map<string, GenerationTask>();
+const generationTasksByProjectId = new Map<string, GenerationTask>();
+const generationTasksByFingerprint = new Map<string, GenerationTask>();
+const backendArtifactRoot =
+  process.env.TEACHING_BACKEND_ARTIFACT_ROOT ??
+  path.resolve(
+    process.cwd(),
+    "../Smart-Courseware-Agent_backend/backend/app/agent/data_assets/demo_show",
+  );
+const generationLockRoot = path.join(backendArtifactRoot, ".generation-locks");
 
 const fallbackKnowledgePoints = ["教学主题", "核心知识", "课堂应用"];
 
@@ -128,11 +141,16 @@ const mergeUnique = (...lists: string[][]) => {
     new Set(
       lists
         .flat()
-        .map((item) => item.trim())
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
         .filter(Boolean),
     ),
   );
 };
+
+const getTurnText = (turn: { text?: string; content?: string }) =>
+  (typeof turn.text === "string" && turn.text) ||
+  (typeof turn.content === "string" && turn.content) ||
+  "";
 
 const getLatestAssistantDraft = (
   conversation: StudioArtifactRequest["conversation"],
@@ -140,7 +158,7 @@ const getLatestAssistantDraft = (
   for (let index = conversation.length - 1; index >= 0; index -= 1) {
     const turn = conversation[index];
     if (turn.role !== "assistant") continue;
-    const text = turn.text.trim();
+    const text = getTurnText(turn).trim();
     if (!text) continue;
     if (/^(当前可用上下文还不够|我继续前需要一个关键信息)/.test(text)) continue;
     return text;
@@ -154,7 +172,7 @@ const getLatestUserConversationText = (
   conversation
     .filter((turn) => turn.role === "user")
     .slice(-8)
-    .map((turn) => turn.text.trim())
+    .map((turn) => getTurnText(turn).trim())
     .filter(Boolean)
     .join("\n");
 
@@ -482,8 +500,58 @@ const buildRequestDigest = (
   const hash = createHash("sha1");
   hash.update(
     JSON.stringify({
+      projectId: request.projectId,
       latestPrompt: request.latestPrompt,
       materials: request.materials,
+      topic: intentDraft.knowledgePoints.slice(0, 2).join("、"),
+      audience: intentDraft.audience,
+      duration: intentDraft.duration,
+      outputStyle: intentDraft.outputStyle,
+    }),
+  );
+  return hash.digest("hex");
+};
+
+const buildPendingTaskDigest = ({
+  projectId,
+  latestPrompt,
+  materials,
+  intentDraft,
+}: {
+  projectId: string;
+  latestPrompt: string;
+  materials: StudioArtifactRequest["materials"];
+  intentDraft: IntentDraft;
+}) => {
+  const hash = createHash("sha1");
+  hash.update(
+    JSON.stringify({
+      projectId,
+      latestPrompt,
+      materials,
+      topic: intentDraft.knowledgePoints.slice(0, 2).join("、"),
+      audience: intentDraft.audience,
+      duration: intentDraft.duration,
+      outputStyle: intentDraft.outputStyle,
+    }),
+  );
+  return hash.digest("hex");
+};
+
+const buildPendingTaskFingerprint = ({
+  latestPrompt,
+  materials,
+  intentDraft,
+}: {
+  latestPrompt: string;
+  materials: StudioArtifactRequest["materials"];
+  intentDraft: IntentDraft;
+}) => {
+  const hash = createHash("sha1");
+  hash.update(
+    JSON.stringify({
+      latestPrompt,
+      materials,
       topic: intentDraft.knowledgePoints.slice(0, 2).join("、"),
       audience: intentDraft.audience,
       duration: intentDraft.duration,
@@ -519,9 +587,7 @@ const buildGeneratingResponse = (
   intentDraft: IntentDraft,
   assistantDraft: string,
 ): StudioArtifactResponse => ({
-  projectId:
-    request.projectId ||
-    buildStableProjectId(request, intentDraft, assistantDraft).projectId,
+  projectId: request.projectId,
   intentDraft,
   artifacts: toGeneratingArtifacts(
     createArtifacts(intentDraft, assistantDraft),
@@ -529,30 +595,172 @@ const buildGeneratingResponse = (
   summary: `已提交真实后端课件生成任务，正在持续生成 ${request.activeTab === "ppt" ? "PPT" : tabLabels[request.activeTab]} 与配套文件，请稍候自动同步完成状态。`,
 });
 
-const ensureGenerationTask = ({
+const getGenerationLockPath = (projectId: string) =>
+  path.join(generationLockRoot, `${projectId}.lock`);
+
+const tryAcquireGenerationLock = async (projectId: string) => {
+  await mkdir(generationLockRoot, { recursive: true });
+
+  try {
+    const handle = await open(getGenerationLockPath(projectId), "wx");
+    await handle.close();
+    return true;
+  } catch (error) {
+    const code =
+      error instanceof Error && "code" in error
+        ? String(error.code)
+        : undefined;
+    if (code === "EEXIST") return false;
+    throw error;
+  }
+};
+
+const releaseGenerationLock = async (projectId: string) => {
+  try {
+    await rm(getGenerationLockPath(projectId));
+  } catch {
+    return;
+  }
+};
+
+const hasGenerationLock = async (projectId: string) => {
+  try {
+    await access(getGenerationLockPath(projectId));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const ensureGenerationTask = async ({
   digest,
+  fingerprint,
   request,
   intentDraft,
   assistantDraft,
 }: {
   digest: string;
+  fingerprint: string;
   request: StudioArtifactRequest;
   intentDraft: IntentDraft;
   assistantDraft: string;
 }) => {
+  const existingForFingerprint = generationTasksByFingerprint.get(fingerprint);
+  if (existingForFingerprint?.status === "pending") {
+    const completedResponse = await resolveExistingBackendArtifactResponse({
+      request: { ...request, projectId: existingForFingerprint.projectId },
+      intentDraft,
+      assistantDraft,
+    });
+    if (completedResponse) {
+      existingForFingerprint.status = "ready";
+      existingForFingerprint.response = completedResponse;
+      existingForFingerprint.updatedAt = Date.now();
+      generationTasks.set(digest, existingForFingerprint);
+      generationTasksByProjectId.set(
+        existingForFingerprint.projectId,
+        existingForFingerprint,
+      );
+      return existingForFingerprint;
+    }
+
+    const lockExists = await hasGenerationLock(existingForFingerprint.projectId);
+    const staleForMs = Date.now() - existingForFingerprint.startedAt;
+
+    if (lockExists || staleForMs < 30 * 60_000) {
+      existingForFingerprint.updatedAt = Date.now();
+      generationTasks.set(digest, existingForFingerprint);
+      generationTasksByProjectId.set(
+        existingForFingerprint.projectId,
+        existingForFingerprint,
+      );
+      return existingForFingerprint;
+    }
+
+    generationTasksByFingerprint.delete(fingerprint);
+    generationTasksByProjectId.delete(existingForFingerprint.projectId);
+  }
+
+  const existingForProject = request.projectId
+    ? generationTasksByProjectId.get(request.projectId)
+    : undefined;
+  if (existingForProject?.status === "pending") {
+    const completedResponse = await resolveExistingBackendArtifactResponse({
+      request: { ...request, projectId: existingForProject.projectId },
+      intentDraft,
+      assistantDraft,
+    });
+    if (completedResponse) {
+      existingForProject.status = "ready";
+      existingForProject.response = completedResponse;
+      existingForProject.updatedAt = Date.now();
+      generationTasks.set(digest, existingForProject);
+      return existingForProject;
+    }
+
+    const lockExists = await hasGenerationLock(existingForProject.projectId);
+    const staleForMs = Date.now() - existingForProject.startedAt;
+
+    if (lockExists || staleForMs < 30 * 60_000) {
+      existingForProject.updatedAt = Date.now();
+      generationTasks.set(digest, existingForProject);
+      return existingForProject;
+    }
+
+    generationTasksByProjectId.delete(existingForProject.projectId);
+    generationTasksByFingerprint.delete(fingerprint);
+  }
+
   const existing = generationTasks.get(digest);
+  if (existing?.status === "pending") {
+    const completedResponse = await resolveExistingBackendArtifactResponse({
+      request,
+      intentDraft,
+      assistantDraft,
+    });
+    if (completedResponse) {
+      existing.status = "ready";
+      existing.response = completedResponse;
+      existing.updatedAt = Date.now();
+      return existing;
+    }
+
+    const lockExists = await hasGenerationLock(existing.projectId);
+    const staleForMs = Date.now() - existing.startedAt;
+
+    if (lockExists || staleForMs < 30 * 60_000) {
+      existing.updatedAt = Date.now();
+      return existing;
+    }
+
+    generationTasks.delete(digest);
+    generationTasksByProjectId.delete(existing.projectId);
+    generationTasksByFingerprint.delete(fingerprint);
+  }
+
   if (existing) {
-    existing.updatedAt = Date.now();
-    return existing;
+    generationTasks.delete(digest);
+    generationTasksByProjectId.delete(existing.projectId);
+    generationTasksByFingerprint.delete(fingerprint);
   }
 
   const task: GenerationTask = {
+    projectId: request.projectId ?? "",
     status: "pending",
     startedAt: Date.now(),
     updatedAt: Date.now(),
   };
 
   generationTasks.set(digest, task);
+  generationTasksByProjectId.set(task.projectId, task);
+  generationTasksByFingerprint.set(fingerprint, task);
+
+  const ownsLock = await tryAcquireGenerationLock(task.projectId);
+  task.ownsLock = ownsLock;
+
+  if (!ownsLock) {
+    return task;
+  }
 
   void generateBackendArtifactResponse({
     request,
@@ -569,6 +777,11 @@ const ensureGenerationTask = ({
       task.error =
         error instanceof Error ? error.message : "backend_generation_failed";
       task.updatedAt = Date.now();
+    })
+    .finally(() => {
+      generationTasksByProjectId.delete(task.projectId);
+      generationTasksByFingerprint.delete(fingerprint);
+      void releaseGenerationLock(task.projectId);
     });
 
   return task;
@@ -578,31 +791,71 @@ export async function POST(request: Request) {
   const rawBody = (await request.json()) as Partial<StudioArtifactRequest> & {
     activeArtifact?: ArtifactTab;
   };
-  const body: StudioArtifactRequest = {
+  const incomingProjectId =
+    typeof rawBody.projectId === "string" ? rawBody.projectId.trim() : "";
+  const bodyBase: StudioArtifactRequest = {
     latestPrompt: rawBody.latestPrompt ?? "",
-    projectId: rawBody.projectId,
+    projectId: incomingProjectId || "",
     conversation: rawBody.conversation ?? [],
     intentDraft: rawBody.intentDraft ?? emptyIntentDraft,
     materials: rawBody.materials ?? [],
     activeTab: rawBody.activeTab ?? rawBody.activeArtifact ?? "ppt",
   };
-  const intentDraft = buildIntentDraft(body);
-  const assistantDraft = getLatestAssistantDraft(body.conversation);
+  const intentDraft = buildIntentDraft(bodyBase);
+  const assistantDraft = getLatestAssistantDraft(bodyBase.conversation);
+  const generatedProjectId = buildStableProjectId(
+    bodyBase,
+    intentDraft,
+    assistantDraft,
+  ).projectId;
 
-  if (shouldGenerateCourseware(body, intentDraft, assistantDraft)) {
-    const existingResponse = await resolveExistingBackendArtifactResponse({
-      request: body,
+  const incomingRequest: StudioArtifactRequest = {
+    ...bodyBase,
+    projectId:
+      incomingProjectId ||
+      `studio-${randomUUID().replace(/-/g, "").slice(0, 13)}`,
+  };
+
+  let body = incomingRequest;
+
+  if (incomingRequest.projectId) {
+    const existingFromProject = await resolveExistingBackendArtifactResponse({
+      request: incomingRequest,
       intentDraft,
       assistantDraft,
     });
 
-    if (existingResponse) {
-      return Response.json(existingResponse);
+    if (existingFromProject) {
+      return Response.json(existingFromProject);
     }
+  }
 
-    const digest = buildRequestDigest(body, intentDraft, assistantDraft);
-    const task = ensureGenerationTask({
+  if (shouldGenerateCourseware(body, intentDraft, assistantDraft)) {
+    const existingFromIncoming = await resolveExistingBackendArtifactResponse({
+      request: incomingRequest,
+      intentDraft,
+      assistantDraft,
+    });
+
+    if (existingFromIncoming) {
+      return Response.json(existingFromIncoming);
+    }
+    body = incomingRequest;
+
+    const digest = buildPendingTaskDigest({
+      projectId: incomingProjectId,
+      latestPrompt: body.latestPrompt,
+      materials: body.materials,
+      intentDraft,
+    });
+    const fingerprint = buildPendingTaskFingerprint({
+      latestPrompt: body.latestPrompt,
+      materials: body.materials,
+      intentDraft,
+    });
+    const task = await ensureGenerationTask({
       digest,
+      fingerprint,
       request: body,
       intentDraft,
       assistantDraft,
@@ -622,8 +875,21 @@ export async function POST(request: Request) {
       );
     }
 
+    const completedResponse = await resolveExistingBackendArtifactResponse({
+      request: body,
+      intentDraft,
+      assistantDraft,
+    });
+    if (completedResponse) {
+      return Response.json(completedResponse);
+    }
+
     return Response.json(
-      buildGeneratingResponse(body, intentDraft, assistantDraft),
+      buildGeneratingResponse(
+        { ...body, projectId: task.projectId },
+        intentDraft,
+        assistantDraft,
+      ),
     );
   }
 

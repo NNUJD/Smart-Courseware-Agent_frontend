@@ -102,6 +102,11 @@ const extractQuotedTopic = (input: string) => {
   return match?.[1]?.trim() ?? "";
 };
 
+const getMessageText = (message: { text?: string; content?: string }) =>
+  (typeof message.text === "string" && message.text) ||
+  (typeof message.content === "string" && message.content) ||
+  "";
+
 const normalizeTopicCandidate = (input: string) => {
   const stripped = input
     .replace(/\s+/g, " ")
@@ -134,6 +139,11 @@ const extractPromptTopic = (input: string) => {
   return normalizeTopicCandidate(match?.[1] ?? "");
 };
 
+const isFeedbackPlaceholderTopic = (input: string) =>
+  /^(这版|这一版|这份|这个|当前|刚才|上个版本|上一版|原来那版|该版)$/.test(
+    input.trim(),
+  );
+
 const pickCleanKnowledgeTopic = (knowledgePoints: string[]) => {
   const cleaned = knowledgePoints
     .map((value) => value.trim())
@@ -152,19 +162,28 @@ const inferTopic = (
   intentDraft: IntentDraft,
   assistantDraft: string,
 ) => {
+  const userMessages = request.conversation
+    .filter((message) => message.role === "user")
+    .map((message) => getMessageText(message))
+    .filter(Boolean);
   const quotedTopic =
     extractPromptTopic(request.latestPrompt) ||
-    extractPromptTopic(
-      request.conversation
-        .filter((message) => message.role === "user")
-        .map((message) => message.text)
-        .join("\n"),
-    );
+    extractPromptTopic(userMessages.join("\n"));
+  const previousPromptTopic =
+    userMessages
+      .slice(0, -1)
+      .reverse()
+      .map((message) => extractPromptTopic(message))
+      .find(
+        (candidate) =>
+          candidate && !isFeedbackPlaceholderTopic(candidate),
+      ) ?? "";
   const cleanKnowledgeTopic = pickCleanKnowledgeTopic(
     intentDraft.knowledgePoints,
   );
   const candidate =
-    quotedTopic ||
+    (quotedTopic && !isFeedbackPlaceholderTopic(quotedTopic) ? quotedTopic : "") ||
+    previousPromptTopic ||
     cleanKnowledgeTopic ||
     normalizeTopicCandidate(intentDraft.knowledgePoints.slice(0, 1).join("")) ||
     extractPromptTopic(intentDraft.teachingGoal) ||
@@ -196,6 +215,27 @@ const buildGenerationKey = (
       audience: intentDraft.audience,
       duration: intentDraft.duration,
       outputStyle: intentDraft.outputStyle,
+    }),
+  );
+  return hash.digest("hex");
+};
+
+const buildGenerationCacheKey = (
+  request: StudioArtifactRequest,
+  intentDraft: IntentDraft,
+  assistantDraft: string,
+) => {
+  const hash = createHash("sha1");
+  hash.update(
+    JSON.stringify({
+      projectId: request.projectId,
+      latestPrompt: request.latestPrompt,
+      materials: request.materials,
+      topic: inferTopic(request, intentDraft, assistantDraft),
+      audience: intentDraft.audience,
+      duration: intentDraft.duration,
+      outputStyle: intentDraft.outputStyle,
+      knowledgePoints: intentDraft.knowledgePoints,
     }),
   );
   return hash.digest("hex");
@@ -295,6 +335,43 @@ const resolveExistingBackendPayloadByProjectId = async ({
     lesson_plan_path: await pickIfExists(lessonPlan),
     optimized_structure_path: await pickIfExists(optimizedStructure),
   };
+};
+
+const sleep = (ms: number) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const waitForCompletedBackendPayload = async ({
+  projectId,
+  topic,
+  numPages,
+  timeoutMs = 25 * 60 * 1000,
+  intervalMs = 4000,
+}: {
+  projectId: string;
+  topic: string;
+  numPages: number;
+  timeoutMs?: number;
+  intervalMs?: number;
+}) => {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const payload = await resolveExistingBackendPayloadByProjectId({
+      projectId,
+      topic,
+      numPages,
+    });
+
+    if (payload?.pptx_path) {
+      return payload;
+    }
+
+    await sleep(intervalMs);
+  }
+
+  throw new Error("backend courseware generation timed out before completion");
 };
 
 const resolveExistingBackendPayloadByIntent = async ({
@@ -463,28 +540,9 @@ const resolveExistingBackendPayload = async ({
       },
     );
     if (recoveredByProjectId) return recoveredByProjectId;
+    return null;
   }
-
-  const { projectId } = buildStableProjectId(
-    request,
-    intentDraft,
-    assistantDraft,
-  );
-  const recoveredByStableProjectId =
-    await resolveExistingBackendPayloadByProjectId({
-      projectId,
-      topic,
-      numPages,
-    });
-
-  if (recoveredByStableProjectId) return recoveredByStableProjectId;
-
-  return resolveExistingBackendPayloadByIntent({
-    topic,
-    numPages,
-    intentDraft,
-    latestPrompt: request.latestPrompt,
-  });
+  return null;
 };
 
 const readOptimizedSlides = async (targetPath: string | null | undefined) => {
@@ -733,6 +791,8 @@ const generateBackendArtifactsUncached = async ({
   intentDraft: IntentDraft;
   assistantDraft: string;
 }) => {
+  const topic = inferTopic(request, intentDraft, assistantDraft);
+  const numPages = inferNumPages(intentDraft);
   const existingPayload = await resolveExistingBackendPayload({
     request,
     intentDraft,
@@ -741,13 +801,9 @@ const generateBackendArtifactsUncached = async ({
   const payload =
     existingPayload ??
     (await (async () => {
-      const topic = inferTopic(request, intentDraft, assistantDraft);
-      const numPages = inferNumPages(intentDraft);
-      const { projectId } = buildStableProjectId(
-        request,
-        intentDraft,
-        assistantDraft,
-      );
+      const projectId =
+        request.projectId ||
+        buildStableProjectId(request, intentDraft, assistantDraft).projectId;
 
       const backendResponse = await fetch(backendCoursewareEndpoint, {
         method: "POST",
@@ -766,7 +822,14 @@ const generateBackendArtifactsUncached = async ({
         throw new Error(detail || "backend courseware generation failed");
       }
 
-      return (await backendResponse.json()) as BackendCoursewareResponse;
+      const acceptedPayload =
+        (await backendResponse.json()) as BackendCoursewareResponse;
+
+      return await waitForCompletedBackendPayload({
+        projectId: acceptedPayload.project_id,
+        topic,
+        numPages,
+      });
     })());
   const artifacts = await buildArtifactsFromBackend(payload, intentDraft);
 
@@ -863,7 +926,11 @@ export const generateBackendArtifactResponse = async ({
   intentDraft: IntentDraft;
   assistantDraft: string;
 }) => {
-  const cacheKey = buildGenerationKey(request, intentDraft, assistantDraft);
+  const cacheKey = buildGenerationCacheKey(
+    request,
+    intentDraft,
+    assistantDraft,
+  );
   const cached = generationCache.get(cacheKey);
   if (cached) return cached;
 

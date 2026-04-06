@@ -75,6 +75,44 @@ const createIdleArtifacts = (): StudioArtifacts => ({
   ),
 });
 
+const hasArtifactRenderableContent = (artifact: ArtifactPreview) =>
+  artifact.sections.length > 0 ||
+  artifact.slides.length > 0 ||
+  artifact.storyboard.length > 0 ||
+  Boolean(artifact.previewHtml) ||
+  Boolean(artifact.download?.localPath);
+
+const _hasAnyRenderableArtifacts = (artifacts: StudioArtifacts) =>
+  (Object.keys(artifacts) as ArtifactTab[]).some((tab) =>
+    hasArtifactRenderableContent(artifacts[tab]),
+  );
+
+const shouldKeepCurrentArtifact = (
+  currentArtifact: ArtifactPreview,
+  incomingArtifact: ArtifactPreview,
+) => {
+  if (
+    incomingArtifact.status === "ready" &&
+    (Boolean(incomingArtifact.download?.localPath) ||
+      Boolean(incomingArtifact.previewHtml) ||
+      hasArtifactRenderableContent(incomingArtifact))
+  ) {
+    return false;
+  }
+
+  if (!hasArtifactRenderableContent(currentArtifact)) return false;
+
+  if (incomingArtifact.status === "idle") {
+    return !hasArtifactRenderableContent(incomingArtifact);
+  }
+
+  if (incomingArtifact.status === "generating") {
+    return !hasArtifactRenderableContent(incomingArtifact);
+  }
+
+  return false;
+};
+
 const toGeneratingArtifact = (artifact: ArtifactPreview): ArtifactPreview => ({
   ...artifact,
   status: "generating",
@@ -86,6 +124,30 @@ const toGeneratingArtifact = (artifact: ArtifactPreview): ArtifactPreview => ({
 
 const defaultPreviewSummary =
   "先通过多轮对话明确教学目标，再逐步生成教案、PPT、视频和讲义预览。";
+
+const normalizeConversationText = (input: string) =>
+  input
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+
+const normalizeConversationComparisonText = (input: string) =>
+  normalizeConversationText(input).replace(/\s+/g, "");
+
+const isStreamingGrowthVariant = (left: string, right: string) => {
+  const normalizedLeft = normalizeConversationComparisonText(left);
+  const normalizedRight = normalizeConversationComparisonText(right);
+
+  if (!normalizedLeft || !normalizedRight) return false;
+  if (normalizedLeft === normalizedRight) return true;
+
+  return (
+    normalizedLeft.startsWith(normalizedRight) ||
+    normalizedRight.startsWith(normalizedLeft)
+  );
+};
 
 const sameConversation = (
   left: StudioConversationTurn[],
@@ -99,47 +161,47 @@ const sameConversation = (
   );
 };
 
-const mergeConversationHistory = (
-  previous: StudioConversationTurn[],
-  incoming: StudioConversationTurn[],
+const sanitizeConversationHistory = (
+  conversation: StudioConversationTurn[],
 ) => {
-  if (previous.length === 0) return incoming;
-  if (incoming.length === 0) return previous;
-  if (sameConversation(previous, incoming)) return incoming;
-
-  let overlap = 0;
-
-  const maxOverlap = Math.min(previous.length, incoming.length);
-  for (let size = maxOverlap; size > 0; size -= 1) {
-    const previousSuffix = previous.slice(previous.length - size);
-    const incomingPrefix = incoming.slice(0, size);
-    if (sameConversation(previousSuffix, incomingPrefix)) {
-      overlap = size;
-      break;
+  return conversation.reduce<StudioConversationTurn[]>((result, turn) => {
+    if (turn.role !== "assistant" && turn.role !== "user") {
+      return result;
     }
-  }
 
-  if (overlap > 0) {
-    return [...previous, ...incoming.slice(overlap)];
-  }
+    const text = normalizeConversationText(turn.text);
+    if (!text) return result;
 
-  const previousPrompt = previous.at(-1)?.text ?? "";
-  const incomingPrompt = incoming.at(-1)?.text ?? "";
-  if (
-    previous.length >= incoming.length &&
-    incoming.every(
-      (item, index) =>
-        item.role === previous[index]?.role && item.text === previous[index]?.text,
-    )
-  ) {
-    return previous;
-  }
+    const normalizedTurn = {
+      role: turn.role,
+      text,
+    } satisfies StudioConversationTurn;
+    const previousTurn = result.at(-1);
 
-  if (previousPrompt && incomingPrompt && previousPrompt === incomingPrompt) {
-    return previous;
-  }
+    if (!previousTurn) {
+      return [normalizedTurn];
+    }
 
-  return incoming;
+    if (previousTurn.role !== normalizedTurn.role) {
+      result.push(normalizedTurn);
+      return result;
+    }
+
+    if (isStreamingGrowthVariant(previousTurn.text, normalizedTurn.text)) {
+      const keepCurrent =
+        normalizeConversationComparisonText(normalizedTurn.text).length >=
+        normalizeConversationComparisonText(previousTurn.text).length;
+
+      return keepCurrent ? [...result.slice(0, -1), normalizedTurn] : result;
+    }
+
+    if (previousTurn.text === normalizedTurn.text) {
+      return result;
+    }
+
+    result.push(normalizedTurn);
+    return result;
+  }, []);
 };
 
 const createInitialWorkspaceState = () => ({
@@ -199,33 +261,31 @@ export const useStudioStore = create<StudioState>()(
       setCurrentProjectId: (projectId) => set({ currentProjectId: projectId }),
       setSyncContext: ({ latestPrompt, conversation }) =>
         set((state) => {
-          const mergedConversation = mergeConversationHistory(
-            state.conversation,
-            conversation,
-          );
+          const sanitizedConversation =
+            sanitizeConversationHistory(conversation);
           const samePrompt = state.latestPrompt === latestPrompt;
           const sameThread = sameConversation(
-            state.conversation,
-            mergedConversation,
+            sanitizeConversationHistory(state.conversation),
+            sanitizedConversation,
           );
 
           if (samePrompt) {
             if (sameThread) {
               return {
                 latestPrompt,
-                conversation: mergedConversation,
+                conversation: sanitizedConversation,
               };
             }
 
             return {
               latestPrompt,
-              conversation: mergedConversation,
+              conversation: sanitizedConversation,
             };
           }
 
           return {
             latestPrompt,
-            conversation: mergedConversation,
+            conversation: sanitizedConversation,
             currentProjectId: "",
             selectedNodeIds: {},
             previewSummary: defaultPreviewSummary,
@@ -268,9 +328,47 @@ export const useStudioStore = create<StudioState>()(
       applyArtifactResponse: (response) =>
         set((state) => {
           const selectedNodeIds = { ...state.selectedNodeIds };
+          const nextArtifacts = {} as StudioArtifacts;
 
           for (const tab of Object.keys(response.artifacts) as ArtifactTab[]) {
-            const artifact = response.artifacts[tab];
+            const incomingArtifact = response.artifacts[tab];
+            const currentArtifact = state.artifacts[tab];
+            const artifact = shouldKeepCurrentArtifact(
+              currentArtifact,
+              incomingArtifact,
+            )
+              ? {
+                  ...currentArtifact,
+                  status:
+                    incomingArtifact.status === "generating"
+                      ? ("generating" as const)
+                      : currentArtifact.status,
+                  title: incomingArtifact.title || currentArtifact.title,
+                  description:
+                    incomingArtifact.description || currentArtifact.description,
+                  downloadName:
+                    incomingArtifact.downloadName ||
+                    currentArtifact.downloadName,
+                  updatedAt:
+                    incomingArtifact.updatedAt ?? currentArtifact.updatedAt,
+                }
+              : incomingArtifact.status === "ready" ||
+                  incomingArtifact.status === "error" ||
+                  !hasArtifactRenderableContent(currentArtifact)
+                ? incomingArtifact
+                : incomingArtifact.status === "generating"
+                  ? {
+                      ...currentArtifact,
+                      status: "generating" as const,
+                      title: incomingArtifact.title,
+                      description: incomingArtifact.description,
+                      downloadName: incomingArtifact.downloadName,
+                      updatedAt:
+                        incomingArtifact.updatedAt ?? currentArtifact.updatedAt,
+                    }
+                  : currentArtifact;
+
+            nextArtifacts[tab] = artifact;
             const existingSelection = state.selectedNodeIds[tab];
             const availableNodeIds = [
               ...artifact.sections.map((item) => item.id),
@@ -293,11 +391,13 @@ export const useStudioStore = create<StudioState>()(
           }
 
           return {
-            isSyncing: false,
+            isSyncing: (Object.keys(nextArtifacts) as ArtifactTab[]).some(
+              (tab) => nextArtifacts[tab].status === "generating",
+            ),
             previewSummary: response.summary,
             currentProjectId: response.projectId ?? state.currentProjectId,
             intentDraft: response.intentDraft,
-            artifacts: response.artifacts,
+            artifacts: nextArtifacts,
             selectedNodeIds,
           };
         }),
@@ -348,6 +448,10 @@ export const useStudioStore = create<StudioState>()(
       onRehydrateStorage: () => (state) => {
         if (!state) return;
         state.isSyncing = false;
+        state.conversation = sanitizeConversationHistory(state.conversation);
+        state.latestPrompt =
+          state.conversation.filter((turn) => turn.role === "user").at(-1)
+            ?.text ?? state.latestPrompt;
       },
     },
   ),

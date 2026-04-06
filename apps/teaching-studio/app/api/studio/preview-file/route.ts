@@ -2,17 +2,77 @@ import { execFile } from "node:child_process";
 import { access, mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { backendArtifactRoot } from "../../_lib/backend-paths";
 
 const execFileAsync = promisify(execFile);
 
-const backendArtifactRoot =
-  process.env.TEACHING_BACKEND_ARTIFACT_ROOT ??
-  path.resolve(
-    process.cwd(),
-    "../Smart-Courseware-Agent_backend/backend/app/agent/data_assets/demo_show",
-  );
+const getSofficeCandidates = () => {
+  const configured = process.env.SOFFICE_PATH?.trim();
+  if (configured) return [configured];
 
-const sofficePath = process.env.SOFFICE_PATH ?? "/opt/homebrew/bin/soffice";
+  if (process.platform === "win32") {
+    return [
+      "C:\\Program Files\\LibreOffice\\program\\soffice.exe",
+      "C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe",
+      "soffice.exe",
+      "soffice",
+    ];
+  }
+
+  if (process.platform === "darwin") {
+    return [
+      "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+      "/opt/homebrew/bin/soffice",
+      "/usr/local/bin/soffice",
+      "soffice",
+    ];
+  }
+
+  return ["/usr/bin/soffice", "/usr/local/bin/soffice", "soffice"];
+};
+
+const isMissingExecutableError = (error: unknown) => {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes("ENOENT") ||
+    error.message.includes("not found") ||
+    error.message.includes("not recognized")
+  );
+};
+
+const convertToPdf = async (sourcePath: string, previewDir: string) => {
+  let lastError: unknown = null;
+
+  for (const candidate of getSofficeCandidates()) {
+    try {
+      if (path.isAbsolute(candidate)) {
+        await access(candidate);
+      }
+
+      await execFileAsync(candidate, [
+        "--headless",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        previewDir,
+        sourcePath,
+      ]);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (isMissingExecutableError(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (lastError) {
+    throw new Error(
+      "soffice_not_found: install LibreOffice or set SOFFICE_PATH to the soffice executable",
+    );
+  }
+};
 
 const resolveSafeArtifactPath = (input: string) => {
   const resolved = path.resolve(input);
@@ -46,18 +106,10 @@ const ensurePdfPreview = async (sourcePath: string) => {
     stat(pdfPath).catch(() => null),
   ]);
 
-  const needsRefresh =
-    !previewMeta || previewMeta.mtimeMs < sourceMeta.mtimeMs;
+  const needsRefresh = !previewMeta || previewMeta.mtimeMs < sourceMeta.mtimeMs;
 
   if (needsRefresh) {
-    await execFileAsync(sofficePath, [
-      "--headless",
-      "--convert-to",
-      "pdf",
-      "--outdir",
-      previewDir,
-      sourcePath,
-    ]);
+    await convertToPdf(sourcePath, previewDir);
   }
 
   return pdfPath;
@@ -68,10 +120,7 @@ export async function GET(request: Request) {
   const localPath = searchParams.get("path");
 
   if (!localPath) {
-    return Response.json(
-      { error: "preview_path_required" },
-      { status: 400 },
-    );
+    return Response.json({ error: "preview_path_required" }, { status: 400 });
   }
 
   try {

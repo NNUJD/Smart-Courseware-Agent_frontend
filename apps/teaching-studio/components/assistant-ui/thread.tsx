@@ -276,7 +276,6 @@ const Composer: FC = () => {
                 <TooltipIconButton
                   tooltip="发送需求"
                   side="bottom"
-                  type="submit"
                   variant="default"
                   size="icon"
                   className="size-9 rounded-full"
@@ -310,10 +309,14 @@ const Composer: FC = () => {
 const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root
+      data-teaching-message="true"
       data-teaching-role="assistant"
       className="mx-auto w-full max-w-(--thread-max-width) py-3"
     >
-      <div className="rounded-[24px] border border-border/60 bg-background/85 px-4 py-4 text-foreground leading-relaxed shadow-sm">
+      <div
+        data-teaching-content="true"
+        className="rounded-[24px] border border-border/60 bg-background/85 px-4 py-4 text-foreground leading-relaxed shadow-sm"
+      >
         <MessagePrimitive.Parts
           components={{
             Text: MarkdownText,
@@ -367,13 +370,17 @@ const AssistantActionBar: FC = () => {
 const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
+      data-teaching-message="true"
       data-teaching-role="user"
       className="mx-auto grid w-full max-w-(--thread-max-width) grid-cols-[minmax(72px,1fr)_auto] gap-y-2 px-2 py-3 [&:where(>*)]:col-start-2"
     >
       <UserMessageAttachments />
 
       <div className="relative col-start-2 min-w-0">
-        <div className="rounded-[24px] bg-primary px-4 py-3 text-primary-foreground shadow-sm">
+        <div
+          data-teaching-content="true"
+          className="rounded-[24px] bg-primary px-4 py-3 text-primary-foreground shadow-sm"
+        >
           <MessagePrimitive.Parts />
         </div>
         <div className="absolute top-1/2 left-0 -translate-x-full -translate-y-1/2 pr-2">

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { FileStack, GraduationCap, PlayCircle, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Assistant } from "./assistant";
@@ -27,20 +28,47 @@ export default function Home() {
       <div className="absolute inset-auto top-16 left-12 h-28 w-28 -translate-y-6 rounded-full border border-primary/20 bg-primary/8 blur-sm" />
       <div className="absolute right-14 bottom-14 h-36 w-36 rounded-full border border-amber-300/30 bg-amber-100/40 blur-sm" />
 
-      <section className="relative z-10 w-full max-w-5xl rounded-[36px] border border-border/70 bg-card/90 p-7 shadow-[0_18px_60px_rgba(19,49,92,0.14)] backdrop-blur">
-        <div className="grid gap-7 lg:grid-cols-[1.15fr_0.85fr]">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-primary text-xs">
-              <Sparkles className="size-3.5" />
-              Smart Courseware Agent
+      <section
+        className="relative z-10 w-full rounded-[36px] border border-border/70 bg-card/90 p-5 shadow-[0_18px_60px_rgba(19,49,92,0.14)] backdrop-blur"
+        style={{ width: "100%", maxWidth: "51rem" }}
+      >
+        <div
+          className="w-full"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(22rem, 24rem))",
+            justifyContent: "center",
+            alignItems: "center",
+            rowGap: "1rem",
+            columnGap: "0.35rem",
+          }}
+        >
+          <div
+            className="w-full"
+            style={{
+              width: "100%",
+              maxWidth: "24rem",
+              minWidth: "0",
+            }}
+          >
+            <div className="inline-flex items-center rounded-full border border-primary/20 bg-primary/8 px-3 py-1 text-primary text-xs">
+              AI 教学智能助手
             </div>
-            <h1 className="mt-4 max-w-2xl font-semibold text-4xl leading-[1.2] lg:text-5xl">
-              教学设计工作台
-            </h1>
-            <p className="mt-4 max-w-2xl text-base text-muted-foreground leading-7">
-              面向教师的智能课件工作流：左侧多轮澄清需求与资料绑定，右侧实时预览教案、PPT、视频和
-              Word， 支持反馈再生成与一键导出。
-            </p>
+            <div className="mt-4 flex items-center gap-4">
+              <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-[26px] border border-primary/15 bg-white/85 shadow-[0_12px_30px_rgba(19,49,92,0.12)]">
+                <Image
+                  src="/branding/zhiyuan-wanxiang-logo.jpg"
+                  alt="智源万象 Logo"
+                  fill
+                  priority
+                  sizes="80px"
+                  className="object-cover"
+                />
+              </div>
+              <h1 className="max-w-2xl font-semibold text-4xl leading-[1.1] lg:text-5xl">
+                智源万象
+              </h1>
+            </div>
 
             <div className="mt-7 flex flex-wrap items-center gap-3">
               <button
@@ -54,20 +82,19 @@ export default function Home() {
                 <PlayCircle className="size-4" />
                 进入工作台
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  sessionStorage.removeItem(WELCOME_SEEN_KEY);
-                  setShowWelcome(false);
-                }}
-                className="rounded-full border border-border/70 bg-background/80 px-5 py-2.5 text-foreground text-sm transition hover:border-primary/40 hover:bg-primary/5"
-              >
-                本次直接进入
-              </button>
             </div>
           </div>
 
-          <div className="grid gap-3.5 self-end">
+          <div
+            className="grid"
+            style={{
+              display: "grid",
+              rowGap: "0.875rem",
+              width: "100%",
+              maxWidth: "23rem",
+              minWidth: "0",
+            }}
+          >
             <FeatureCard
               icon={<GraduationCap className="size-5" />}
               title="多轮教学澄清"

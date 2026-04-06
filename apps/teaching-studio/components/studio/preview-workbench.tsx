@@ -45,6 +45,10 @@ const tabLabels: Record<ArtifactTab, string> = {
   word: "Word",
 };
 
+const visibleArtifactTabs = artifactTabs.filter(
+  (tab): tab is Exclude<ArtifactTab, "word"> => tab !== "word",
+);
+
 const feedbackTemplates: Record<ArtifactTab, string[]> = {
   "lesson-plan": [
     "请把教学流程调整为“导入 - 探究 - 练习 - 总结”的顺序。",
@@ -109,7 +113,7 @@ const buildFilePreviewUrl = (localPath?: string) => {
 
 const readFileNameFromDisposition = (header: string | null) => {
   if (!header) return null;
-  const match = header.match(/filename=\"([^\"]+)\"/i);
+  const match = header.match(/filename="([^"]+)"/i);
   return match?.[1] ?? null;
 };
 
@@ -129,7 +133,6 @@ export const PreviewWorkbench = () => {
   const selectedNodeIds = useStudioStore((state) => state.selectedNodeIds);
   const artifacts = useStudioStore((state) => state.artifacts);
   const isSyncing = useStudioStore((state) => state.isSyncing);
-  const previewSummary = useStudioStore((state) => state.previewSummary);
   const currentProjectId = useStudioStore((state) => state.currentProjectId);
   const latestPrompt = useStudioStore((state) => state.latestPrompt);
   const conversation = useStudioStore((state) => state.conversation);
@@ -156,7 +159,14 @@ export const PreviewWorkbench = () => {
   );
 
   const artifact = artifacts[activeArtifact];
-  const hasGeneratingArtifacts = useMemo(
+
+  useEffect(() => {
+    if (activeArtifact === "word") {
+      setActiveArtifact("lesson-plan");
+    }
+  }, [activeArtifact, setActiveArtifact]);
+
+  const _hasGeneratingArtifacts = useMemo(
     () =>
       artifactTabs.some((tab) => artifacts[tab].status === "generating") ||
       artifactTabs.some(
@@ -206,7 +216,21 @@ export const PreviewWorkbench = () => {
 
   const currentTitle =
     currentSection?.title ?? currentSlide?.title ?? currentScene?.title;
-  const hasPreview = Boolean(currentTitle);
+  const hasGeneratedFilePreview = Boolean(
+    artifact.download?.localPath &&
+      (activeArtifact === "ppt" ||
+        activeArtifact === "lesson-plan" ||
+        activeArtifact === "word"),
+  );
+  const previewHeading =
+    currentTitle ??
+    (hasGeneratedFilePreview
+      ? artifact.downloadName || artifact.title
+      : null) ??
+    artifact.title;
+  const hasPreview = Boolean(
+    currentTitle || artifact.previewHtml || hasGeneratedFilePreview,
+  );
 
   const queueFeedback = (template: string) => {
     const message = currentTitle
@@ -341,18 +365,22 @@ export const PreviewWorkbench = () => {
     () => artifactTabs.some((tab) => artifacts[tab].status === "generating"),
     [artifacts],
   );
-  const hasMissingDownloadPath = useMemo(
+  const hasAnyFileBackedArtifactNeedingRefresh = useMemo(
     () =>
-      !artifacts.ppt.download?.localPath ||
-      !artifacts["lesson-plan"].download?.localPath ||
-      !artifacts.word.download?.localPath,
+      (["ppt", "lesson-plan", "word"] as const).some((tab) => {
+        const candidate = artifacts[tab];
+        return (
+          !candidate.download?.localPath &&
+          (candidate.status === "generating" || candidate.status === "ready")
+        );
+      }),
     [artifacts],
   );
 
   useEffect(() => {
     const shouldPollCurrentProject =
       Boolean(currentProjectId) &&
-      (hasAnyGeneratingArtifacts || hasMissingDownloadPath);
+      (hasAnyGeneratingArtifacts || hasAnyFileBackedArtifactNeedingRefresh);
 
     if (!shouldPollCurrentProject || !currentProjectId) return;
 
@@ -361,6 +389,7 @@ export const PreviewWorkbench = () => {
       try {
         const response = await fetch("/api/studio/artifacts", {
           method: "POST",
+          cache: "no-store",
           headers: {
             "Content-Type": "application/json",
           },
@@ -398,10 +427,10 @@ export const PreviewWorkbench = () => {
     conversation,
     currentProjectId,
     hasAnyGeneratingArtifacts,
-    hasMissingDownloadPath,
     intentDraft,
     latestPrompt,
     materials,
+    hasAnyFileBackedArtifactNeedingRefresh,
   ]);
 
   useEffect(() => {
@@ -439,8 +468,8 @@ export const PreviewWorkbench = () => {
   return (
     <section className="flex min-h-0 flex-col border-border/60 border-t bg-card/75 backdrop-blur lg:border-t-0 lg:border-l">
       <header className="border-border/70 border-b px-5 py-4">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+          <div className="min-w-0 lg:w-[18rem] lg:flex-none xl:w-[20rem] 2xl:w-[22rem]">
             <p className="flex items-center gap-2 font-medium text-primary text-sm">
               <Sparkles className="size-4" />
               生成结果工作台
@@ -448,16 +477,13 @@ export const PreviewWorkbench = () => {
             <h2 className="mt-1 font-semibold text-xl">
               右侧实时预览与反馈再生成
             </h2>
-            <p className="mt-2 max-w-3xl text-muted-foreground text-sm leading-6">
-              {previewSummary}
-            </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Button
               type="button"
               variant="outline"
-              className="rounded-full"
+              className="shrink-0 rounded-full px-3"
               onClick={() => setIsPreviewSidebarOpen((value) => !value)}
             >
               {isPreviewSidebarOpen ? (
@@ -467,14 +493,14 @@ export const PreviewWorkbench = () => {
               )}
               {isPreviewSidebarOpen ? "收起侧栏" : "展开侧栏"}
             </Button>
-            <nav className="inline-flex rounded-full border border-border/70 bg-background/80 p-1">
-              {artifactTabs.map((tab) => (
+            <nav className="inline-flex shrink-0 items-center rounded-full border border-border/70 bg-background/80 p-1">
+              {visibleArtifactTabs.map((tab) => (
                 <button
                   key={tab}
                   type="button"
                   onClick={() => setActiveArtifact(tab)}
                   className={cn(
-                    "rounded-full px-4 py-2 text-sm transition-colors",
+                    "rounded-full px-3 py-2 text-sm transition-colors",
                     activeArtifact === tab
                       ? "bg-primary text-primary-foreground"
                       : "text-muted-foreground hover:text-foreground",
@@ -485,12 +511,14 @@ export const PreviewWorkbench = () => {
               ))}
               <Link
                 href="/virtual-labs/buoyancy"
-                className="rounded-full px-4 py-2 text-muted-foreground text-sm transition-colors hover:text-foreground"
+                className="rounded-full px-3 py-2 text-muted-foreground text-sm transition-colors hover:text-foreground"
               >
                 仿真
               </Link>
             </nav>
-            <ExportButton />
+            <div className="shrink-0">
+              <ExportButton />
+            </div>
           </div>
         </div>
       </header>
@@ -636,9 +664,7 @@ export const PreviewWorkbench = () => {
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-muted-foreground text-xs">当前查看</p>
-              <h3 className="font-semibold text-lg">
-                {currentTitle ?? "等待首版预览结果"}
-              </h3>
+              <h3 className="font-semibold text-lg">{previewHeading}</h3>
             </div>
 
             <Button
@@ -689,9 +715,12 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
   expanded = false,
 }) => {
   const filePreviewUrl = buildFilePreviewUrl(artifact.download?.localPath);
+  const inlinePreviewHtml = artifact.previewHtml?.trim() || null;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [isFileExporting, setIsFileExporting] = useState(false);
-  const activeArtifactFromStore = useStudioStore((state) => state.activeArtifact);
+  const activeArtifactFromStore = useStudioStore(
+    (state) => state.activeArtifact,
+  );
   const artifacts = useStudioStore((state) => state.artifacts);
   const materials = useStudioStore((state) => state.materials);
   const intentDraft = useStudioStore((state) => state.intentDraft);
@@ -760,13 +789,6 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
       activeArtifact === "lesson-plan" ||
       activeArtifact === "word")
   ) {
-    const fileTypeLabel =
-      activeArtifact === "ppt"
-        ? "PPT 成品"
-        : activeArtifact === "lesson-plan"
-          ? "教案成品"
-          : "讲义成品";
-
     return (
       <div
         className={cn(
@@ -777,13 +799,7 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
         <div className="relative flex-1 overflow-hidden rounded-[30px] border border-border/70 bg-[radial-gradient(circle_at_top,rgba(125,211,252,0.16),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.98))] shadow-sm">
           <div className="border-border/60 border-b px-4 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="text-muted-foreground text-xs">真实文件预览</p>
-                <h3 className="font-semibold text-lg">{artifact.title}</h3>
-                <p className="mt-1 max-w-2xl text-muted-foreground text-sm">
-                  当前窗口展示的是已生成文件本身，和下载内容保持一致。你现在看到的就是最终导出的页面效果。
-                </p>
-              </div>
+              <h3 className="font-semibold text-lg">{artifact.title}</h3>
 
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700 text-xs">
@@ -797,12 +813,6 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
             </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
-              <div className="inline-flex min-h-10 flex-1 items-center gap-2 rounded-2xl border border-border/60 bg-background/80 px-3 py-2 text-muted-foreground text-xs sm:max-w-[360px]">
-                <span className="rounded-full bg-secondary px-2 py-1 text-[11px]">
-                  {fileTypeLabel}
-                </span>
-                <span className="truncate">{artifact.downloadName}</span>
-              </div>
               <Button
                 type="button"
                 variant="outline"
@@ -838,27 +848,109 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
                 </Link>
               </Button>
             </div>
-        </div>
+          </div>
 
-        <div className="p-3">
+          <div className="p-3">
             <div className="mb-3 flex items-center gap-2 px-2">
               <span className="size-2.5 rounded-full bg-rose-400/90" />
               <span className="size-2.5 rounded-full bg-amber-400/90" />
-            <span className="size-2.5 rounded-full bg-emerald-400/90" />
-            <div className="ml-2 flex-1 rounded-full border border-border/60 bg-background/80 px-3 py-1 text-muted-foreground text-xs">
-              文件预览 · {artifact.downloadName}
+              <span className="size-2.5 rounded-full bg-emerald-400/90" />
+              <div className="ml-2 flex-1 rounded-full border border-border/60 bg-background/80 px-3 py-1 text-muted-foreground text-xs">
+                {artifact.downloadName}
+              </div>
+            </div>
+
+            <iframe
+              ref={iframeRef}
+              title={`${artifact.title}真实文件预览`}
+              src={filePreviewUrl}
+              className={cn(
+                "w-full rounded-[22px] border border-border/70 bg-white shadow-inner",
+                expanded ? "min-h-[70vh]" : "min-h-[480px]",
+              )}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (inlinePreviewHtml) {
+    const allowPrint = activeArtifact !== "video";
+
+    return (
+      <div
+        className={cn(
+          "flex h-full flex-col gap-3",
+          expanded ? "min-h-[78vh]" : "min-h-[560px]",
+        )}
+      >
+        <div className="relative flex-1 overflow-hidden rounded-[30px] border border-border/70 bg-[radial-gradient(circle_at_top,rgba(125,211,252,0.16),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.98))] shadow-sm">
+          <div className="border-border/60 border-b px-4 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <h3 className="font-semibold text-lg">{artifact.title}</h3>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700 text-xs">
+                  <CheckCircle2 className="size-3.5" />
+                  已生成完成
+                </span>
+                <span className="inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs">
+                  {artifact.downloadName}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              {artifact.download?.localPath ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={() => void handleDirectExport()}
+                  disabled={isFileExporting}
+                >
+                  {isFileExporting ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Download className="size-4" />
+                  )}
+                  下载文件
+                </Button>
+              ) : null}
+              {allowPrint ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={handlePrintPreview}
+                >
+                  <Printer className="size-4" />
+                  打印预览
+                </Button>
+              ) : null}
             </div>
           </div>
 
-          <iframe
-            ref={iframeRef}
-            title={`${artifact.title}真实文件预览`}
-            src={filePreviewUrl}
-            className={cn(
-              "w-full rounded-[22px] border border-border/70 bg-white shadow-inner",
-              expanded ? "min-h-[70vh]" : "min-h-[480px]",
-            )}
-          />
+          <div className="p-3">
+            <div className="mb-3 flex items-center gap-2 px-2">
+              <span className="size-2.5 rounded-full bg-rose-400/90" />
+              <span className="size-2.5 rounded-full bg-amber-400/90" />
+              <span className="size-2.5 rounded-full bg-emerald-400/90" />
+              <div className="ml-2 flex-1 rounded-full border border-border/60 bg-background/80 px-3 py-1 text-muted-foreground text-xs">
+                {artifact.downloadName}
+              </div>
+            </div>
+
+            <iframe
+              ref={iframeRef}
+              title={`${artifact.title}预览`}
+              srcDoc={withAdaptivePreviewMedia(inlinePreviewHtml)}
+              className={cn(
+                "w-full rounded-[22px] border border-border/70 bg-white shadow-inner",
+                expanded ? "min-h-[70vh]" : "min-h-[480px]",
+              )}
+            />
           </div>
         </div>
       </div>
@@ -969,9 +1061,9 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
       <div className="max-w-md">
         {artifact.status === "generating" ? (
           <>
-            <p className="font-medium">正在生成首版结果</p>
+            <p className="font-medium">当前暂无可预览内容</p>
             <p className="mt-2 text-muted-foreground text-sm leading-6">
-              当前任务已经提交到后端，正在生成 {artifact.title}。生成完成后，这里会自动切换到真实文件预览。
+              左侧会持续展示当前任务状态；当文件真正生成完成后，右侧会自动切换到对应的文件预览。
             </p>
           </>
         ) : artifact.status === "error" ? (
@@ -985,8 +1077,8 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
           <>
             <p className="font-medium">等待生成首版结果</p>
             <p className="mt-2 text-muted-foreground text-sm leading-6">
-              当左侧完成教学目标、知识点、资料用途和产出风格的澄清后，右侧会显示可修改的教案、PPT、视频和
-              Word 预览。
+              当左侧完成教学目标、知识点、资料用途和产出风格的澄清后，右侧会显示可修改的教案、PPT
+              和视频预览。
             </p>
           </>
         )}

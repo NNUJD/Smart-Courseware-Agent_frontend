@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>浮力虚拟仿真实验</title>
+    <link rel="stylesheet" href="/virtual-labs/assets/buoyancy/styles.css" />
+    <script src="/virtual-labs/assets/buoyancy/app.js" defer></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="panel control-panel">
+        <p class="eyebrow">Virtual Lab Demo</p>
+        <h1>浮力虚拟仿真实验</h1>
+        <p class="lead">
+          用一个轻量动画快速演示浮力现象。调节密度和体积后，右侧试块会在液体中表现出不同状态。
+        </p>
+
+        <section class="section-block">
+          <div class="section-title-row">
+            <h2>预设场景</h2>
+            <span>一键切换</span>
+          </div>
+          <div class="preset-grid">
+            <button class="preset-button is-active" type="button" data-preset="wood-water">木块入水</button>
+            <button class="preset-button" type="button" data-preset="plastic-brine">塑料块入盐水</button>
+            <button class="preset-button" type="button" data-preset="stone-water">石块入水</button>
+            <button class="preset-button" type="button" data-preset="neutral-fluid">接近悬浮</button>
+          </div>
+        </section>
+
+        <section class="section-block">
+          <div class="section-title-row">
+            <h2>参数调节</h2>
+            <span>实时联动</span>
+          </div>
+
+          <label class="range-control" for="objectDensity">
+            <span class="label-row">
+              <span>物体密度</span>
+              <strong id="objectDensityValue">0.72 g/cm^3</strong>
+            </span>
+            <input id="objectDensity" type="range" min="0.20" max="3.00" step="0.01" value="0.72" />
+          </label>
+
+          <label class="range-control" for="liquidDensity">
+            <span class="label-row">
+              <span>液体密度</span>
+              <strong id="liquidDensityValue">1.00 g/cm^3</strong>
+            </span>
+            <input id="liquidDensity" type="range" min="0.70" max="1.40" step="0.01" value="1.00" />
+          </label>
+
+          <label class="range-control" for="volume">
+            <span class="label-row">
+              <span>物体体积</span>
+              <strong id="volumeValue">2.40 L</strong>
+            </span>
+            <input id="volume" type="range" min="0.50" max="6.00" step="0.10" value="2.40" />
+          </label>
+
+          <button id="rerunButton" class="rerun-button" type="button">重新演示</button>
+        </section>
+      </aside>
+
+      <main class="stage-card">
+        <div class="stage-header">
+          <div>
+            <p class="eyebrow">Buoyancy Stage</p>
+            <h2>试块在液体中的运动状态</h2>
+          </div>
+          <div id="stateBadge" class="state-badge" data-state="floating">漂浮</div>
+        </div>
+
+        <div class="simulation-stage">
+          <div class="tank-area">
+            <div id="tankShell" class="tank-shell">
+              <div class="scale-plate">
+                <span>现象观察区</span>
+                <strong id="statusSummary">物体密度小于液体密度，试块漂浮。</strong>
+              </div>
+
+              <div class="tank">
+                <div class="tank-ruler">
+                  <span>0%</span>
+                  <span>25%</span>
+                  <span>50%</span>
+                  <span>75%</span>
+                  <span>100%</span>
+                </div>
+                <div id="waterFill" class="water-fill"></div>
+                <div class="water-surface"></div>
+                <div id="objectBlock" class="object-block floating">试块</div>
+                <div id="buoyancyArrow" class="force-arrow force-up"><span>F浮</span></div>
+                <div id="gravityArrow" class="force-arrow force-down"><span>G</span></div>
+                <div class="bubble bubble-a"></div>
+                <div class="bubble bubble-b"></div>
+                <div class="bubble bubble-c"></div>
+              </div>
+            </div>
+
+            <div class="legend-strip">
+              <div class="legend-chip legend-buoyancy">向上箭头：浮力</div>
+              <div class="legend-chip legend-gravity">向下箭头：重力</div>
+              <div class="legend-chip legend-note">动画仅用于教学展示，不追求高精度仿真</div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <aside class="panel insight-panel">
+        <p class="eyebrow">Data Readout</p>
+        <h2>实验读数</h2>
+
+        <div class="metric-grid">
+          <article class="metric-card">
+            <span>重力 G</span>
+            <strong id="weightValue">16.93 N</strong>
+          </article>
+          <article class="metric-card">
+            <span>最大浮力</span>
+            <strong id="maxBuoyancyValue">23.52 N</strong>
+          </article>
+          <article class="metric-card">
+            <span>实际浮力</span>
+            <strong id="actualBuoyancyValue">16.93 N</strong>
+          </article>
+          <article class="metric-card">
+            <span>净力</span>
+            <strong id="netForceValue">0.00 N</strong>
+          </article>
+          <article class="metric-card">
+            <span>浸没比例</span>
+            <strong id="submergedValue">72%</strong>
+          </article>
+          <article class="metric-card">
+            <span>排开液体质量</span>
+            <strong id="displacedMassValue">1.73 kg</strong>
+          </article>
+        </div>
+
+        <section class="formula-card">
+          <h3>核心关系</h3>
+          <p>浮力大小等于排开液体所受重力。</p>
+          <code>F浮 = ρ液 × g × V排</code>
+        </section>
+
+        <section class="observation-card">
+          <h3>实验结论</h3>
+          <p id="phenomenonText">
+            当物体密度小于液体密度时，只需排开部分液体就能平衡重力，所以试块会漂浮在液面附近。
+          </p>
+        </section>
+      </aside>
+    </div>
+  </body>
+</html>

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
+import type { ThreadMessage } from "@assistant-ui/core";
+import { useAssistantRuntime } from "@assistant-ui/react";
 import type {
   ArtifactTab,
   StudioArtifactRequest,
@@ -17,27 +19,131 @@ const normalizeText = (input: string) =>
     .join("\n")
     .trim();
 
-const readConversationFromDom = (): StudioConversationTurn[] => {
-  if (typeof document === "undefined") return [];
-
-  const nodes = Array.from(
-    document.querySelectorAll<HTMLElement>("[data-teaching-role]"),
+const getMessageText = (message: ThreadMessage) =>
+  normalizeText(
+    message.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("\n"),
   );
 
-  return nodes
-    .map((node) => {
-      const role: StudioConversationTurn["role"] =
-        node.dataset.teachingRole === "assistant" ? "assistant" : "user";
-      return {
-        role,
-        text: normalizeText(node.innerText || node.textContent || ""),
-      };
-    })
-    .filter((item) => item.text.length > 0);
+const readConversationFromRuntime = (
+  messages: readonly ThreadMessage[],
+): StudioConversationTurn[] => {
+  if (messages.length === 0) return [];
+
+  return messages.flatMap((message) => {
+    if (message.role !== "assistant" && message.role !== "user") return [];
+
+    const text = getMessageText(message);
+    if (!text) return [];
+
+    return [
+      {
+        role: message.role,
+        text,
+      } satisfies StudioConversationTurn,
+    ];
+  });
 };
 
 const getLatestUserPrompt = (conversation: StudioConversationTurn[]) =>
   conversation.filter((message) => message.role === "user").at(-1)?.text ?? "";
+
+const triggerAfterAssistant =
+  (process.env.NEXT_PUBLIC_TEACHING_TRIGGER_AFTER_ASSISTANT ?? "false") ===
+  "true";
+const assistantReplyStableDelayMs = Math.max(
+  0,
+  Number(
+    process.env.NEXT_PUBLIC_TEACHING_TRIGGER_AFTER_ASSISTANT_STABLE_DELAY_MS ??
+      "1200",
+  ),
+);
+const assistantReplyMinimumDelayAfterUserMs = Math.max(
+  0,
+  Number(
+    process.env.NEXT_PUBLIC_TEACHING_TRIGGER_AFTER_USER_DELAY_MS ?? "1500",
+  ),
+);
+
+const getLatestUserMessageIndex = (messages: readonly ThreadMessage[]) => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      return index;
+    }
+  }
+
+  return -1;
+};
+
+const getLatestUserMessage = (messages: readonly ThreadMessage[]) => {
+  const latestUserIndex = getLatestUserMessageIndex(messages);
+  if (latestUserIndex === -1) return null;
+  return messages[latestUserIndex] ?? null;
+};
+
+const getLatestAssistantMessageAfterLatestUser = (
+  messages: readonly ThreadMessage[],
+) => {
+  const latestUserIndex = getLatestUserMessageIndex(messages);
+
+  if (latestUserIndex === -1) return null;
+
+  for (let index = messages.length - 1; index > latestUserIndex; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant") {
+      return message;
+    }
+  }
+
+  return null;
+};
+
+const hasAssistantReplyAfterLatestUser = (
+  messages: readonly ThreadMessage[],
+) => {
+  const latestAssistantMessage =
+    getLatestAssistantMessageAfterLatestUser(messages);
+
+  if (!latestAssistantMessage) return false;
+  if (latestAssistantMessage.role !== "assistant") return false;
+  if (latestAssistantMessage.status?.type === "requires-action") return false;
+  if (getMessageText(latestAssistantMessage).length === 0) return false;
+
+  return true;
+};
+
+const _isAssistantReplySettled = (
+  messages: readonly ThreadMessage[],
+  isThreadRunning: boolean,
+) => {
+  const latestAssistantMessage =
+    getLatestAssistantMessageAfterLatestUser(messages);
+  if (!latestAssistantMessage) return false;
+  if (latestAssistantMessage.role !== "assistant") return false;
+  if (latestAssistantMessage.status?.type === "requires-action") return false;
+  if (getMessageText(latestAssistantMessage).length === 0) return false;
+  if (isThreadRunning) return false;
+
+  return true;
+};
+
+const buildAssistantReplyActivityKey = (messages: readonly ThreadMessage[]) => {
+  const latestUserIndex = getLatestUserMessageIndex(messages);
+  const latestAssistantMessage =
+    getLatestAssistantMessageAfterLatestUser(messages);
+
+  if (latestUserIndex === -1 || !latestAssistantMessage) return null;
+
+  const latestUserMessage = messages[latestUserIndex];
+  if (!latestUserMessage) return null;
+
+  return [
+    latestUserMessage.id,
+    latestAssistantMessage.id,
+    getMessageText(latestAssistantMessage),
+  ].join("::");
+};
 
 const sameConversation = (
   left: StudioConversationTurn[],
@@ -51,8 +157,23 @@ const sameConversation = (
 };
 
 export const StudioSyncBridge = () => {
+  const assistantRuntime = useAssistantRuntime();
   const mountedRef = useRef(true);
   const pendingProjectIdRef = useRef<string | null>(null);
+  const assistantReplyActivityRef = useRef<{
+    key: string | null;
+    at: number;
+  }>({
+    key: null,
+    at: 0,
+  });
+  const latestUserTurnRef = useRef<{
+    key: string | null;
+    at: number;
+  }>({
+    key: null,
+    at: 0,
+  });
 
   const studioMaterials = useStudioStore((state) => state.materials);
   const materials = studioMaterials.map((material) => ({
@@ -68,7 +189,6 @@ export const StudioSyncBridge = () => {
 
   const activeTab = useStudioStore((state) => state.activeArtifact);
   const artifacts = useStudioStore((state) => state.artifacts);
-  const isSyncing = useStudioStore((state) => state.isSyncing);
   const intentDraft = useStudioStore((state) => state.intentDraft);
   const currentProjectId = useStudioStore((state) => state.currentProjectId);
   const latestPrompt = useStudioStore((state) => state.latestPrompt);
@@ -97,13 +217,6 @@ export const StudioSyncBridge = () => {
         )
         .join("\n"),
     [materials],
-  );
-  const artifactStatusDigest = useMemo(
-    () =>
-      (Object.keys(artifacts) as ArtifactTab[])
-        .map((tab) => `${tab}:${artifacts[tab].status}`)
-        .join("|"),
-    [artifacts],
   );
   const hasGeneratingArtifacts = useMemo(
     () =>
@@ -181,7 +294,10 @@ export const StudioSyncBridge = () => {
       };
       inFlightDigestRef.current = requestDigest;
 
-      if (!isSyncing && !hasGeneratingArtifacts) {
+      const shouldEnterGeneratingState =
+        !hasGeneratingArtifacts &&
+        lastCompletedDigestRef.current !== requestDigest;
+      if (shouldEnterGeneratingState) {
         startSync();
       }
 
@@ -196,6 +312,7 @@ export const StudioSyncBridge = () => {
 
       fetch("/api/studio/artifacts", {
         method: "POST",
+        cache: "no-store",
         headers: {
           "Content-Type": "application/json",
         },
@@ -209,9 +326,23 @@ export const StudioSyncBridge = () => {
         })
         .then((payload) => {
           if (!mountedRef.current) return;
+          const latestState = useStudioStore.getState();
+          const isStalePrompt =
+            latestState.latestPrompt.trim() !== nextLatestPrompt.trim();
+          const isStaleProject =
+            Boolean(projectIdForRequest) &&
+            Boolean(latestState.currentProjectId) &&
+            latestState.currentProjectId !== projectIdForRequest;
+
           inFlightDigestRef.current = null;
+          if (isStalePrompt || isStaleProject) {
+            return;
+          }
           if (payload.projectId) {
             pendingProjectIdRef.current = payload.projectId;
+            if (latestState.currentProjectId !== payload.projectId) {
+              setCurrentProjectId(payload.projectId);
+            }
           }
 
           const allReady = (
@@ -238,9 +369,103 @@ export const StudioSyncBridge = () => {
     };
 
     const tick = () => {
-      const domConversation = readConversationFromDom();
-      if (domConversation.length > 0) {
-        runSync(domConversation);
+      const threadState = assistantRuntime.thread.getState();
+      const runtimeMessages = threadState.messages;
+      const runtimeConversation = readConversationFromRuntime(runtimeMessages);
+      const latestUserMessage = getLatestUserMessage(runtimeMessages);
+      const latestUserKey = latestUserMessage?.id ?? null;
+      const nextLatestPrompt = getLatestUserPrompt(runtimeConversation);
+      const conversationChanged =
+        runtimeConversation.length > 0 &&
+        (latestPrompt !== nextLatestPrompt ||
+          !sameConversation(persistedConversation, runtimeConversation));
+
+      if (latestUserTurnRef.current.key !== latestUserKey) {
+        latestUserTurnRef.current = {
+          key: latestUserKey,
+          at: latestUserKey ? Date.now() : 0,
+        };
+      }
+
+      if (conversationChanged && nextLatestPrompt) {
+        if (latestPrompt !== nextLatestPrompt) {
+          pendingProjectIdRef.current = null;
+          lastCompletedDigestRef.current = null;
+          inFlightDigestRef.current = null;
+          lastAttemptRef.current = {
+            digest: null,
+            at: 0,
+          };
+        }
+
+        setSyncContext({
+          latestPrompt: nextLatestPrompt,
+          conversation: runtimeConversation,
+        });
+      }
+
+      if (runtimeConversation.length > 0) {
+        const shouldPollExistingGeneration =
+          hasGeneratingArtifacts &&
+          Boolean(currentProjectId || pendingProjectIdRef.current);
+
+        if (triggerAfterAssistant) {
+          const hasAssistantReply =
+            hasAssistantReplyAfterLatestUser(runtimeMessages);
+          const replyActivityKey = hasAssistantReply
+            ? buildAssistantReplyActivityKey(runtimeMessages)
+            : null;
+
+          if (assistantReplyActivityRef.current.key !== replyActivityKey) {
+            assistantReplyActivityRef.current = {
+              key: replyActivityKey,
+              at: replyActivityKey ? Date.now() : 0,
+            };
+          }
+
+          if (!hasAssistantReply && !shouldPollExistingGeneration) return;
+
+          if (
+            !shouldPollExistingGeneration &&
+            Date.now() - assistantReplyActivityRef.current.at <
+              assistantReplyStableDelayMs
+          ) {
+            return;
+          }
+
+          if (
+            !shouldPollExistingGeneration &&
+            Date.now() - latestUserTurnRef.current.at <
+              assistantReplyMinimumDelayAfterUserMs
+          ) {
+            return;
+          }
+        }
+
+        runSync(runtimeConversation);
+        return;
+      }
+
+      if (threadState.isRunning) {
+        return;
+      }
+
+      assistantReplyActivityRef.current = {
+        key: null,
+        at: 0,
+      };
+
+      if (persistedConversation.length > 0 && latestPrompt.trim().length > 0) {
+        if (
+          triggerAfterAssistant &&
+          latestUserTurnRef.current.at > 0 &&
+          Date.now() - latestUserTurnRef.current.at <
+            assistantReplyMinimumDelayAfterUserMs
+        ) {
+          return;
+        }
+
+        runSync(persistedConversation);
         return;
       }
 
@@ -278,11 +503,10 @@ export const StudioSyncBridge = () => {
   }, [
     activeTab,
     applyArtifactResponse,
-    artifactStatusDigest,
     hasGeneratingArtifacts,
     intentDraft,
-    isSyncing,
     currentProjectId,
+    assistantRuntime,
     latestPrompt,
     materials,
     materialsDigest,

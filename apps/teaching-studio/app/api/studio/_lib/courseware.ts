@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { access, readFile, readdir, stat } from "node:fs/promises";
+import {
+  access,
+  copyFile,
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import type {
   IntentDraft,
@@ -10,6 +18,7 @@ import type {
   StudioArtifacts,
   VideoStoryboardScene,
 } from "@/lib/studio-contract";
+import { backendArtifactRoot } from "../../_lib/backend-paths";
 
 type BackendCoursewareResponse = {
   project_id: string;
@@ -21,6 +30,7 @@ type BackendCoursewareResponse = {
   pptx_path?: string | null;
   lesson_plan_path?: string | null;
   optimized_structure_path?: string | null;
+  video_path?: string | null;
 };
 
 type OptimizedSlideRecord = {
@@ -30,15 +40,303 @@ type OptimizedSlideRecord = {
   bullets?: string[];
 };
 
+type DemoVariant = "v1" | "v2";
+
+type DemoProjectManifest = {
+  variant: DemoVariant;
+  topic: string;
+  createdAt: string;
+};
+
+type DemoScenario = {
+  topic: string;
+  audience: string;
+  duration: string;
+  outputStyle: string;
+  teachingGoal: string;
+  knowledgePoints: string[];
+  logicSequence: string[];
+  keyDifficulties: string[];
+  slideRecords: OptimizedSlideRecord[];
+};
+
 const backendBaseUrl =
   process.env.TEACHING_BACKEND_BASE_URL ?? "http://127.0.0.1:8000";
+const backendAutoOnlineImageSearch =
+  process.env.TEACHING_BACKEND_AUTO_ONLINE_IMAGE_SEARCH !== "false";
+const backendAutoAiImageGeneration =
+  process.env.TEACHING_BACKEND_AUTO_AI_IMAGE_GENERATION !== "false";
+const demoArtifactModeEnabled =
+  process.env.TEACHING_PRESET_ARTIFACTS === "true" ||
+  process.env.TEACHING_DEMO_MODE === "true";
+const triggerAfterAssistant =
+  (process.env.TEACHING_TRIGGER_AFTER_ASSISTANT ??
+    process.env.NEXT_PUBLIC_TEACHING_TRIGGER_AFTER_ASSISTANT ??
+    "false") === "true";
+const forcedDemoVariant = (() => {
+  const raw = process.env.TEACHING_DEMO_FORCE_VARIANT?.trim().toLowerCase();
+  return raw === "v1" || raw === "v2" ? raw : null;
+})();
+const demoDelayMs = Math.max(
+  1200,
+  Number(process.env.TEACHING_DEMO_DELAY_MS ?? "12000") || 12000,
+);
 const backendCoursewareEndpoint = `${backendBaseUrl.replace(/\/$/, "")}/api/v1/courseware/generate`;
-const backendArtifactRoot =
-  process.env.TEACHING_BACKEND_ARTIFACT_ROOT ??
-  path.resolve(
-    process.cwd(),
-    "../Smart-Courseware-Agent_backend/backend/app/agent/data_assets/demo_show",
-  );
+const demoTemplateRoot = path.join(backendArtifactRoot, ".demo_templates");
+const demoVariantKeywords =
+  /(修改|调整|优化|改一下|改版|重做|补充|更新|细化|重新生成|第二版|新版)/;
+const demoScenarios: Record<DemoVariant, DemoScenario> = {
+  v1: {
+    topic: "浮力",
+    audience: "小学五年级",
+    duration: "40分钟",
+    outputStyle: "实验探究风格",
+    teachingGoal:
+      "帮助学生理解浮力概念，能结合生活现象判断浮力方向，并通过实验归纳影响浮力大小的因素。",
+    knowledgePoints: [
+      "浮力概念",
+      "浮力方向",
+      "影响浮力大小的因素",
+      "阿基米德原理",
+    ],
+    logicSequence: [
+      "课程导入",
+      "目标明确",
+      "概念认识",
+      "故事理解",
+      "实验探究",
+      "生活应用",
+      "总结迁移",
+    ],
+    keyDifficulties: [
+      "浮力与重力、支持力的区分",
+      "排开液体体积与浮力大小的关系",
+    ],
+    slideRecords: [
+      {
+        slide_index: 1,
+        title: "智能优化课件",
+        slide_type: "cover",
+        bullets: [
+          "聚焦浮力主题与五年级探究课堂定位",
+          "通过课程导入页建立课堂情境与学习期待",
+          "引出本课将围绕浮力现象、实验探究和生活应用展开",
+        ],
+      },
+      {
+        slide_index: 2,
+        title: "学习目标与路径",
+        slide_type: "goals",
+        bullets: [
+          "认识浮力的基本概念",
+          "理解浮力的关键机制",
+          "通过案例、图示和互动任务建立完整认知",
+        ],
+      },
+      {
+        slide_index: 3,
+        title: "什么是浮力？",
+        slide_type: "concept",
+        bullets: [
+          "浮力是液体对物体向上的托力",
+          "通过压入水中的体验感受无形的向上托力",
+          "帮助学生明确浮力方向总是竖直向上",
+        ],
+      },
+      {
+        slide_index: 4,
+        title: "阿基米德的故事",
+        slide_type: "story",
+        bullets: [
+          "从阿基米德故事引出浮力大小规律",
+          "理解排开液体越多，受到的浮力越大",
+          "用生活类比帮助学生形成直观认识",
+        ],
+      },
+      {
+        slide_index: 5,
+        title: "物体的沉与浮",
+        slide_type: "analysis",
+        bullets: [
+          "通过比较浮力与重力判断物体沉浮",
+          "区分漂浮物体和下沉物体的典型例子",
+          "帮助学生建立沉浮判断的基本模型",
+        ],
+      },
+      {
+        slide_index: 6,
+        title: "有趣的浮力实验",
+        slide_type: "experiment",
+        bullets: [
+          "以鸡蛋在盐水中的变化作为实验情境",
+          "明确实验材料、现象观察和操作步骤",
+          "为解释液体密度与浮力关系做铺垫",
+        ],
+      },
+      {
+        slide_index: 7,
+        title: "原理探究与互动活动",
+        slide_type: "interactive",
+        bullets: [
+          "解释鸡蛋在清水和盐水中的不同状态",
+          "理解液体密度越大，浮力越大",
+          "通过互动任务让学生完成证据表达",
+        ],
+      },
+      {
+        slide_index: 8,
+        title: "浮力在生活中的应用",
+        slide_type: "application",
+        bullets: [
+          "联系轮船、潜水艇和热气球等生活情境",
+          "说明浮力让交通与生活更便利",
+          "引导学生把课堂知识迁移到真实世界",
+        ],
+      },
+      {
+        slide_index: 9,
+        title: "总结与迁移",
+        slide_type: "summary",
+        bullets: [
+          "回顾浮力定义、沉浮判断和关键结论",
+          "提出用今天知识解释真实现象的迁移任务",
+          "完成课堂复盘与课后延伸思考",
+        ],
+      },
+    ],
+  },
+  v2: {
+    topic: "浮力",
+    audience: "小学五年级",
+    duration: "40分钟",
+    outputStyle: "实验探究风格",
+    teachingGoal:
+      "在首版基础上强化实验逻辑与课堂互动，让学生能更完整地用证据解释浮力现象并完成应用迁移。",
+    knowledgePoints: [
+      "浮力概念",
+      "浮力方向",
+      "阿基米德原理",
+      "浮沉条件",
+      "生活应用",
+    ],
+    logicSequence: [
+      "课程导入",
+      "目标明确",
+      "概念认识",
+      "故事理解",
+      "沉浮判断",
+      "实验探究",
+      "互动挑战",
+      "生活迁移",
+    ],
+    keyDifficulties: [
+      "从实验数据过渡到阿基米德原理",
+      "把浮力知识迁移到真实生活情境",
+    ],
+    slideRecords: [
+      {
+        slide_index: 1,
+        title: "智能优化课件",
+        slide_type: "cover",
+        bullets: [
+          "聚焦浮力主题与五年级探究课堂定位",
+          "通过课程导入页建立课堂情境与学习期待",
+          "引出本课将围绕浮力现象、实验探究和生活应用展开",
+        ],
+      },
+      {
+        slide_index: 2,
+        title: "总结与迁移",
+        slide_type: "summary",
+        bullets: [
+          "回顾浮力是液体对物体向上的托力",
+          "梳理沉浮取决于浮力与重力比较的结论",
+          "引导学生用课堂知识解释真实生活现象",
+        ],
+      },
+      {
+        slide_index: 3,
+        title: "学习目标与路径",
+        slide_type: "goals",
+        bullets: [
+          "认识浮力的基本概念",
+          "理解浮力的关键机制",
+          "通过案例、图示和互动任务建立完整认知",
+        ],
+      },
+      {
+        slide_index: 4,
+        title: "什么是浮力？",
+        slide_type: "concept",
+        bullets: [
+          "用无形的大手比喻帮助学生理解浮力",
+          "通过把泡沫块压入水中的体验感受阻力",
+          "帮助学生明确浮力方向总是竖直向上",
+        ],
+      },
+      {
+        slide_index: 5,
+        title: "阿基米德的故事",
+        slide_type: "story",
+        bullets: [
+          "从阿基米德故事引出浮力大小规律",
+          "理解排开液体越多，受到的浮力越大",
+          "用浴缸溢水类比帮助学生形成直观认识",
+        ],
+      },
+      {
+        slide_index: 6,
+        title: "物体的沉与浮",
+        slide_type: "analysis",
+        bullets: [
+          "通过比较浮力与重力判断物体沉浮",
+          "区分漂浮物体和下沉物体的典型例子",
+          "帮助学生建立沉浮判断的基本模型",
+        ],
+      },
+      {
+        slide_index: 7,
+        title: "有趣的浮力实验",
+        slide_type: "experiment",
+        bullets: [
+          "以鸡蛋在盐水中的变化作为实验情境",
+          "明确实验材料、现象观察和操作步骤",
+          "为解释液体密度与浮力关系做铺垫",
+        ],
+      },
+      {
+        slide_index: 8,
+        title: "原理探究与互动活动",
+        slide_type: "interactive",
+        bullets: [
+          "解释鸡蛋在清水和盐水中的不同状态",
+          "理解液体密度越大，浮力越大",
+          "通过互动活动强化证据和结论之间的联系",
+        ],
+      },
+      {
+        slide_index: 9,
+        title: "互动挑战：我是小判官",
+        slide_type: "practice",
+        bullets: [
+          "判断木块、石头和实心塑料球在水中的状态",
+          "引导学生先给出判断再说明理由",
+          "用课堂概念检验学生理解程度",
+        ],
+      },
+      {
+        slide_index: 10,
+        title: "浮力在生活中的应用",
+        slide_type: "application",
+        bullets: [
+          "结合轮船、潜水艇、游泳圈和视力表浮球等情境",
+          "强调浮力无处不在并服务于生活",
+          "引导学生完成从课堂到真实场景的迁移",
+        ],
+      },
+    ],
+  },
+};
 
 const generationCache = new Map<string, Promise<StudioArtifactResponse>>();
 
@@ -175,14 +473,15 @@ const inferTopic = (
       .reverse()
       .map((message) => extractPromptTopic(message))
       .find(
-        (candidate) =>
-          candidate && !isFeedbackPlaceholderTopic(candidate),
+        (candidate) => candidate && !isFeedbackPlaceholderTopic(candidate),
       ) ?? "";
   const cleanKnowledgeTopic = pickCleanKnowledgeTopic(
     intentDraft.knowledgePoints,
   );
   const candidate =
-    (quotedTopic && !isFeedbackPlaceholderTopic(quotedTopic) ? quotedTopic : "") ||
+    (quotedTopic && !isFeedbackPlaceholderTopic(quotedTopic)
+      ? quotedTopic
+      : "") ||
     previousPromptTopic ||
     cleanKnowledgeTopic ||
     normalizeTopicCandidate(intentDraft.knowledgePoints.slice(0, 1).join("")) ||
@@ -254,6 +553,550 @@ export const buildStableProjectId = (
   return {
     generationKey,
     projectId: `studio-${generationKey.slice(0, 13)}`,
+  };
+};
+
+const mergeUniqueStrings = (...lists: (readonly string[] | undefined)[]) =>
+  Array.from(
+    new Set(
+      lists.flatMap((list) =>
+        (list ?? []).map((value) => value.trim()).filter(Boolean),
+      ),
+    ),
+  );
+
+const resolveDemoVariant = (request: StudioArtifactRequest): DemoVariant => {
+  if (forcedDemoVariant) return forcedDemoVariant;
+  return demoVariantKeywords.test(request.latestPrompt) ? "v2" : "v1";
+};
+
+const buildDemoIntentDraft = (
+  intentDraft: IntentDraft,
+  scenario: DemoScenario,
+): IntentDraft => {
+  const mergedKnowledgePoints =
+    intentDraft.knowledgePoints.length > 0
+      ? mergeUniqueStrings(
+          intentDraft.knowledgePoints,
+          scenario.knowledgePoints,
+        )
+      : scenario.knowledgePoints;
+  const mergedLogicSequence =
+    intentDraft.logicSequence.length > 0
+      ? mergeUniqueStrings(intentDraft.logicSequence, scenario.logicSequence)
+      : scenario.logicSequence;
+  const mergedKeyDifficulties =
+    intentDraft.keyDifficulties.length > 0
+      ? mergeUniqueStrings(
+          intentDraft.keyDifficulties,
+          scenario.keyDifficulties,
+        )
+      : scenario.keyDifficulties;
+
+  return {
+    teachingGoal: intentDraft.teachingGoal || scenario.teachingGoal,
+    audience: intentDraft.audience || scenario.audience,
+    duration: intentDraft.duration || scenario.duration,
+    knowledgePoints: mergedKnowledgePoints,
+    logicSequence: mergedLogicSequence,
+    keyDifficulties: mergedKeyDifficulties,
+    outputStyle: intentDraft.outputStyle || scenario.outputStyle,
+    finalRequirement:
+      intentDraft.finalRequirement ||
+      `围绕${scenario.topic}产出可直接用于课堂展示的PPT、教案、视频和讲义。`,
+    missingFields: [],
+    confirmed: true,
+  };
+};
+
+const getDemoTemplateDir = (variant: DemoVariant) =>
+  path.join(demoTemplateRoot, variant === "v1" ? "buoyancy_v1" : "buoyancy_v2");
+
+const getDemoProjectPaths = (projectId: string) => {
+  const projectDir = path.join(backendArtifactRoot, projectId);
+  return {
+    projectDir,
+    pptxPath: path.join(projectDir, "generated_courseware_optimized.pptx"),
+    pptPreviewPdfPath: path.join(
+      projectDir,
+      "generated_courseware_preview.pdf",
+    ),
+    lessonPlanPath: path.join(projectDir, "lesson_plan_optimized.docx"),
+    lessonPlanPreviewPdfPath: path.join(projectDir, "lesson_plan_preview.pdf"),
+    videoPath: path.join(projectDir, "teaching_demo_video.mp4"),
+    optimizedStructurePath: path.join(projectDir, "optimized_structure.json"),
+    manifestPath: path.join(projectDir, "demo_manifest.json"),
+  };
+};
+
+const readDemoProjectManifest = async (
+  projectId: string,
+): Promise<DemoProjectManifest | null> => {
+  const { manifestPath } = getDemoProjectPaths(projectId);
+
+  try {
+    const raw = await readFile(manifestPath, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<DemoProjectManifest>;
+    if (
+      (parsed.variant === "v1" || parsed.variant === "v2") &&
+      typeof parsed.topic === "string"
+    ) {
+      return {
+        variant: parsed.variant,
+        topic: parsed.topic,
+        createdAt:
+          typeof parsed.createdAt === "string"
+            ? parsed.createdAt
+            : new Date().toISOString(),
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const materializeDemoProject = async ({
+  projectId,
+  variant,
+}: {
+  projectId: string;
+  variant: DemoVariant;
+}) => {
+  const scenario = demoScenarios[variant];
+  const templateDir = getDemoTemplateDir(variant);
+  const {
+    projectDir,
+    pptxPath,
+    pptPreviewPdfPath,
+    lessonPlanPath,
+    lessonPlanPreviewPdfPath,
+    videoPath,
+    optimizedStructurePath,
+    manifestPath,
+  } = getDemoProjectPaths(projectId);
+  const copyIfExists = async (fromPath: string, toPath: string) => {
+    try {
+      await access(fromPath);
+      await copyFile(fromPath, toPath);
+    } catch {
+      return;
+    }
+  };
+
+  await mkdir(projectDir, { recursive: true });
+  await Promise.all([
+    copyFile(
+      path.join(templateDir, "generated_courseware_optimized.pptx"),
+      pptxPath,
+    ),
+    copyIfExists(
+      path.join(templateDir, "generated_courseware_preview.pdf"),
+      pptPreviewPdfPath,
+    ),
+    copyFile(
+      path.join(templateDir, "lesson_plan_optimized.docx"),
+      lessonPlanPath,
+    ),
+    copyIfExists(
+      path.join(templateDir, "lesson_plan_preview.pdf"),
+      lessonPlanPreviewPdfPath,
+    ),
+    copyFile(path.join(templateDir, "teaching_demo_video.mp4"), videoPath),
+    writeFile(
+      optimizedStructurePath,
+      JSON.stringify(scenario.slideRecords, null, 2),
+      "utf-8",
+    ),
+    writeFile(
+      manifestPath,
+      JSON.stringify(
+        {
+          variant,
+          topic: scenario.topic,
+          createdAt: new Date().toISOString(),
+        } satisfies DemoProjectManifest,
+        null,
+        2,
+      ),
+      "utf-8",
+    ),
+  ]);
+};
+
+const buildMediaPreviewUrl = (localPath: string) =>
+  `/api/studio/media?path=${encodeURIComponent(localPath)}`;
+
+const buildPdfPreviewUrl = (localPath: string) =>
+  `/api/studio/preview-file?path=${encodeURIComponent(localPath)}`;
+
+const hasFile = async (targetPath: string) => {
+  try {
+    await access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const renderPdfPreviewHtml = ({
+  title,
+  fileName,
+  pdfPath,
+}: {
+  title: string;
+  fileName: string;
+  pdfPath: string;
+}) =>
+  `
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
+        font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      }
+      main {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 16px;
+        box-sizing: border-box;
+      }
+      .titlebar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.8);
+        color: #334155;
+        font-size: 13px;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #38bdf8;
+      }
+      iframe {
+        flex: 1;
+        width: 100%;
+        border: 0;
+        border-radius: 22px;
+        background: white;
+        box-shadow: 0 16px 50px rgba(15, 23, 42, 0.14);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="titlebar">
+        <span class="dot"></span>
+        <span>${escapeHtml(title)}</span>
+        <span style="opacity:0.72;">${escapeHtml(fileName)}</span>
+      </div>
+      <iframe src="${escapeHtml(buildPdfPreviewUrl(pdfPath))}" title="${escapeHtml(title)}"></iframe>
+    </main>
+  </body>
+</html>
+`.trim();
+
+const renderDemoDocumentPreviewHtml = ({
+  label,
+  title,
+  fileName,
+  items,
+}: {
+  label: string;
+  title: string;
+  fileName: string;
+  items: Array<{ title: string; body: string }>;
+}) => {
+  const itemMarkup = items
+    .map((item) =>
+      `
+        <article style="border-radius:24px;border:1px solid rgba(148,163,184,0.22);background:rgba(255,255,255,0.86);padding:20px 22px;box-shadow:0 20px 40px rgba(15,23,42,0.08);">
+          <h3 style="margin:0 0 10px;font-size:20px;line-height:1.4;color:#0f172a;">${escapeHtml(item.title)}</h3>
+          <p style="margin:0;font-size:14px;line-height:1.9;color:#334155;white-space:pre-wrap;">${escapeHtml(item.body)}</p>
+        </article>
+      `.trim(),
+    )
+    .join("");
+
+  return `
+<!doctype html>
+<html lang="zh-CN">
+  <body style="margin:0;background:linear-gradient(180deg,#f7fbff 0%,#eef4ff 100%);font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#0f172a;">
+    <main style="padding:32px 36px 40px;box-sizing:border-box;">
+      <section style="margin-bottom:24px;border-radius:28px;background:linear-gradient(135deg,#0f172a,#1d4ed8);padding:28px 30px;color:#f8fafc;box-shadow:0 24px 60px rgba(15,23,42,0.22);">
+        <div style="display:inline-flex;border-radius:999px;background:rgba(255,255,255,0.12);padding:8px 14px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(label)}</div>
+        <h1 style="margin:18px 0 8px;font-size:34px;line-height:1.25;">${escapeHtml(title)}</h1>
+        <p style="margin:0;font-size:14px;line-height:1.8;color:rgba(248,250,252,0.84);">演示文件：${escapeHtml(fileName)}</p>
+      </section>
+      <section style="display:grid;gap:16px;">${itemMarkup}</section>
+    </main>
+  </body>
+</html>
+`.trim();
+};
+
+const renderDemoPptPreviewHtml = ({
+  topic,
+  fileName,
+  slides,
+}: {
+  topic: string;
+  fileName: string;
+  slides: OptimizedSlideRecord[];
+}) => {
+  const cards = slides
+    .map((slide, index) => {
+      const bullets = (slide.bullets ?? []).slice(0, 3);
+      const bulletMarkup = bullets
+        .map((bullet) => `<li>${escapeHtml(bullet)}</li>`)
+        .join("");
+
+      return `
+        <article style="border-radius:24px;background:rgba(255,255,255,0.92);padding:18px 18px 20px;border:1px solid rgba(148,163,184,0.22);box-shadow:0 18px 44px rgba(30,41,59,0.08);">
+          <div style="font-size:12px;color:#64748b;letter-spacing:0.08em;text-transform:uppercase;">Slide ${index + 1}</div>
+          <h3 style="margin:10px 0 12px;font-size:20px;line-height:1.4;color:#0f172a;">${escapeHtml(slide.title ?? `第 ${index + 1} 页`)}</h3>
+          <ul style="margin:0;padding-left:20px;font-size:14px;line-height:1.8;color:#334155;">${bulletMarkup}</ul>
+        </article>
+      `.trim();
+    })
+    .join("");
+
+  return `
+<!doctype html>
+<html lang="zh-CN">
+  <body style="margin:0;background:linear-gradient(180deg,#eff6ff 0%,#dbeafe 100%);font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#0f172a;">
+    <main style="padding:32px 36px 40px;">
+      <section style="margin-bottom:24px;border-radius:30px;background:linear-gradient(135deg,#0f172a,#1d4ed8 48%,#38bdf8);padding:30px 32px;color:#f8fafc;box-shadow:0 26px 60px rgba(15,23,42,0.24);">
+        <div style="display:inline-flex;border-radius:999px;background:rgba(255,255,255,0.14);padding:8px 14px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;">PPT Preview</div>
+        <h1 style="margin:18px 0 10px;font-size:36px;line-height:1.2;">${escapeHtml(topic)}课件预览</h1>
+        <p style="margin:0;font-size:15px;line-height:1.8;color:rgba(248,250,252,0.86);">当前展示的是本轮生成结果的页面结构概览，可直接下载 ${escapeHtml(fileName)} 查看完整成品。</p>
+      </section>
+      <section style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;">${cards}</section>
+    </main>
+  </body>
+</html>
+`.trim();
+};
+
+const renderDemoVideoPreviewHtml = ({
+  fileName,
+  videoPath,
+  scenes,
+}: {
+  fileName: string;
+  videoPath: string;
+  scenes: VideoStoryboardScene[];
+}) => {
+  const sceneMarkup = scenes
+    .slice(0, 5)
+    .map((scene, index) =>
+      `
+        <article style="border-radius:22px;border:1px solid rgba(148,163,184,0.2);background:rgba(255,255,255,0.08);padding:16px 18px;">
+          <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:rgba(255,255,255,0.7);">Scene ${index + 1}</div>
+          <h3 style="margin:8px 0 8px;font-size:18px;line-height:1.45;color:#f8fafc;">${escapeHtml(scene.title)}</h3>
+          <p style="margin:0;font-size:13px;line-height:1.8;color:rgba(226,232,240,0.86);">${escapeHtml(scene.summary)}</p>
+        </article>
+      `.trim(),
+    )
+    .join("");
+
+  return `
+<!doctype html>
+<html lang="zh-CN">
+  <body style="margin:0;background:linear-gradient(180deg,#0f172a 0%,#1e293b 100%);font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#e2e8f0;">
+    <main style="padding:28px 32px 36px;">
+      <section style="margin-bottom:22px;">
+        <div style="display:inline-flex;border-radius:999px;background:rgba(56,189,248,0.16);padding:8px 14px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#bae6fd;">Video Preview</div>
+        <h1 style="margin:16px 0 8px;font-size:32px;line-height:1.25;">视频成片与分镜预览</h1>
+        <p style="margin:0;font-size:14px;line-height:1.8;color:rgba(226,232,240,0.82);">${escapeHtml(fileName)}</p>
+      </section>
+      <section style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,0.9fr);gap:18px;align-items:start;">
+        <div style="border-radius:28px;background:rgba(15,23,42,0.42);padding:18px;border:1px solid rgba(148,163,184,0.18);box-shadow:0 20px 50px rgba(15,23,42,0.28);">
+          <video controls playsinline style="display:block;width:100%;border-radius:20px;background:#020617;">
+            <source src="${escapeHtml(buildMediaPreviewUrl(videoPath))}" type="video/mp4" />
+          </video>
+        </div>
+        <div style="display:grid;gap:14px;">${sceneMarkup}</div>
+      </section>
+    </main>
+  </body>
+</html>
+`.trim();
+};
+
+const buildDemoResponseSummary = (projectId: string, variant: DemoVariant) =>
+  variant === "v2"
+    ? `已根据最新修改意见完成课件更新，生成项目 ${projectId}。当前预览、PPT、教案和视频都已同步到第二版内容。`
+    : `已完成首版课件生成，生成项目 ${projectId}。当前预览、PPT、教案和视频都已同步到首版内容。`;
+
+const buildDemoArtifactResponse = async ({
+  request,
+  intentDraft,
+  variant,
+}: {
+  request: StudioArtifactRequest;
+  intentDraft: IntentDraft;
+  variant: DemoVariant;
+}): Promise<StudioArtifactResponse> => {
+  const scenario = demoScenarios[variant];
+  const mergedIntentDraft = buildDemoIntentDraft(intentDraft, scenario);
+  const optimizedSlides = scenario.slideRecords;
+  const pptSlides = buildPreviewSlides(optimizedSlides, scenario.topic);
+  const lessonSections = buildLessonSections(
+    optimizedSlides,
+    mergedIntentDraft,
+  );
+  const wordSections = buildWordSections(optimizedSlides, mergedIntentDraft);
+  const storyboard = buildStoryboard(optimizedSlides, mergedIntentDraft);
+  const projectId =
+    request.projectId ||
+    buildStableProjectId(request, mergedIntentDraft, "").projectId;
+  const {
+    pptxPath,
+    pptPreviewPdfPath,
+    lessonPlanPath,
+    lessonPlanPreviewPdfPath,
+    videoPath,
+  } = getDemoProjectPaths(projectId);
+  const updatedAt = new Date().toISOString();
+  const pptFileName = path.basename(pptxPath);
+  const lessonPlanFileName = path.basename(lessonPlanPath);
+  const videoFileName = path.basename(videoPath);
+  const [hasPptPreviewPdf, hasLessonPreviewPdf] = await Promise.all([
+    hasFile(pptPreviewPdfPath),
+    hasFile(lessonPlanPreviewPdfPath),
+  ]);
+
+  return {
+    projectId,
+    intentDraft: mergedIntentDraft,
+    artifacts: {
+      "lesson-plan": {
+        tab: "lesson-plan",
+        title: "教案草案",
+        description: "当前预览已整理为可直接讲授的教案结构。",
+        updatedAt,
+        downloadName: lessonPlanFileName,
+        status: "ready",
+        sections: lessonSections,
+        slides: [],
+        storyboard: [],
+        previewHtml: hasLessonPreviewPdf
+          ? renderPdfPreviewHtml({
+              title: `${scenario.topic}教案预览`,
+              fileName: lessonPlanFileName,
+              pdfPath: lessonPlanPreviewPdfPath,
+            })
+          : renderDemoDocumentPreviewHtml({
+              label: "Lesson Plan",
+              title: `${scenario.topic}教案预览`,
+              fileName: lessonPlanFileName,
+              items: lessonSections.map((section) => ({
+                title: section.title,
+                body: section.body,
+              })),
+            }),
+        download: {
+          fileName: lessonPlanFileName,
+          contentType:
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          localPath: lessonPlanPath,
+        },
+      },
+      ppt: {
+        tab: "ppt",
+        title: "PPT 预览",
+        description: "当前预览展示本轮生成课件的页面结构与讲授重点。",
+        updatedAt,
+        downloadName: pptFileName,
+        status: "ready",
+        sections: [],
+        slides: pptSlides,
+        storyboard: [],
+        previewHtml: hasPptPreviewPdf
+          ? renderPdfPreviewHtml({
+              title: `${scenario.topic}课件预览`,
+              fileName: pptFileName,
+              pdfPath: pptPreviewPdfPath,
+            })
+          : renderDemoPptPreviewHtml({
+              topic: scenario.topic,
+              fileName: pptFileName,
+              slides: optimizedSlides,
+            }),
+        download: {
+          fileName: pptFileName,
+          contentType:
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          localPath: pptxPath,
+        },
+      },
+      video: {
+        tab: "video",
+        title: "视频脚本",
+        description: "当前视频部分已同步成片与分镜说明。",
+        updatedAt,
+        downloadName: videoFileName,
+        status: "ready",
+        sections: [],
+        slides: [],
+        storyboard,
+        previewHtml: renderDemoVideoPreviewHtml({
+          fileName: videoFileName,
+          videoPath,
+          scenes: storyboard,
+        }),
+        download: {
+          fileName: videoFileName,
+          contentType: "video/mp4",
+          localPath: videoPath,
+        },
+      },
+      word: {
+        tab: "word",
+        title: "Word 讲义",
+        description: "当前讲义预览已和教案保持同步，可直接导出。",
+        updatedAt,
+        downloadName: lessonPlanFileName,
+        status: "ready",
+        sections: wordSections,
+        slides: [],
+        storyboard: [],
+        previewHtml: hasLessonPreviewPdf
+          ? renderPdfPreviewHtml({
+              title: `${scenario.topic}讲义预览`,
+              fileName: lessonPlanFileName,
+              pdfPath: lessonPlanPreviewPdfPath,
+            })
+          : renderDemoDocumentPreviewHtml({
+              label: "Handout",
+              title: `${scenario.topic}讲义预览`,
+              fileName: lessonPlanFileName,
+              items: wordSections.map((section) => ({
+                title: section.title,
+                body: section.body,
+              })),
+            }),
+        download: {
+          fileName: lessonPlanFileName,
+          contentType:
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          localPath: lessonPlanPath,
+        },
+      },
+    },
+    summary: buildDemoResponseSummary(projectId, variant),
   };
 };
 
@@ -374,7 +1217,7 @@ const waitForCompletedBackendPayload = async ({
   throw new Error("backend courseware generation timed out before completion");
 };
 
-const resolveExistingBackendPayloadByIntent = async ({
+const _resolveExistingBackendPayloadByIntent = async ({
   topic,
   numPages,
   intentDraft,
@@ -543,6 +1386,122 @@ const resolveExistingBackendPayload = async ({
     return null;
   }
   return null;
+};
+
+const resolveExistingDemoArtifactResponse = async ({
+  request,
+  intentDraft,
+}: {
+  request: StudioArtifactRequest;
+  intentDraft: IntentDraft;
+}) => {
+  if (!request.projectId) return null;
+
+  const manifest = await readDemoProjectManifest(request.projectId);
+  if (!manifest) return null;
+
+  const { pptxPath, lessonPlanPath, videoPath, optimizedStructurePath } =
+    getDemoProjectPaths(request.projectId);
+
+  try {
+    await Promise.all([
+      access(pptxPath),
+      access(lessonPlanPath),
+      access(videoPath),
+      access(optimizedStructurePath),
+    ]);
+  } catch {
+    return null;
+  }
+
+  return buildDemoArtifactResponse({
+    request,
+    intentDraft,
+    variant: manifest.variant,
+  });
+};
+
+const resolveLatestCompletedDemoArtifactResponse = async ({
+  request,
+  intentDraft,
+}: {
+  request: StudioArtifactRequest;
+  intentDraft: IntentDraft;
+}) => {
+  try {
+    const entries = await readdir(backendArtifactRoot, { withFileTypes: true });
+    const completedProjects = await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          const manifest = await readDemoProjectManifest(entry.name);
+          if (!manifest) return null;
+
+          const { pptxPath } = getDemoProjectPaths(entry.name);
+          try {
+            const metadata = await stat(pptxPath);
+            return {
+              projectId: entry.name,
+              mtimeMs: metadata.mtimeMs,
+              manifest,
+            };
+          } catch {
+            return null;
+          }
+        }),
+    );
+
+    const latest = completedProjects
+      .filter(
+        (
+          candidate,
+        ): candidate is NonNullable<(typeof completedProjects)[number]> =>
+          candidate !== null,
+      )
+      .sort((left, right) => right.mtimeMs - left.mtimeMs)[0];
+
+    if (!latest) return null;
+
+    return buildDemoArtifactResponse({
+      request: {
+        ...request,
+        projectId: latest.projectId,
+      },
+      intentDraft,
+      variant: latest.manifest.variant,
+    });
+  } catch {
+    return null;
+  }
+};
+
+const generateDemoArtifactResponseUncached = async ({
+  request,
+  intentDraft,
+}: {
+  request: StudioArtifactRequest;
+  intentDraft: IntentDraft;
+}) => {
+  const variant = resolveDemoVariant(request);
+  const projectId =
+    request.projectId ||
+    buildStableProjectId(
+      request,
+      buildDemoIntentDraft(intentDraft, demoScenarios[variant]),
+      "",
+    ).projectId;
+
+  await sleep(demoDelayMs);
+  await materializeDemoProject({ projectId, variant });
+
+  return buildDemoArtifactResponse({
+    request: {
+      ...request,
+      projectId,
+    },
+    intentDraft,
+    variant,
+  });
 };
 
 const readOptimizedSlides = async (targetPath: string | null | undefined) => {
@@ -721,6 +1680,17 @@ const buildArtifactsFromBackend = async (
       sections: lessonSections,
       slides: [],
       storyboard: [],
+      previewHtml: payload.lesson_plan_path
+        ? undefined
+        : renderDemoDocumentPreviewHtml({
+            label: "Lesson Plan",
+            title: `${payload.topic}教案预览`,
+            fileName: lessonPlanFileName,
+            items: lessonSections.map((section) => ({
+              title: section.title,
+              body: section.body,
+            })),
+          }),
       download: payload.lesson_plan_path
         ? {
             fileName: lessonPlanFileName,
@@ -740,6 +1710,13 @@ const buildArtifactsFromBackend = async (
       sections: [],
       slides: pptSlides,
       storyboard: [],
+      previewHtml: payload.pptx_path
+        ? undefined
+        : renderDemoPptPreviewHtml({
+            topic: payload.topic,
+            fileName: pptFileName,
+            slides: optimizedSlides,
+          }),
       download: payload.pptx_path
         ? {
             fileName: pptFileName,
@@ -770,6 +1747,17 @@ const buildArtifactsFromBackend = async (
       sections: wordSections,
       slides: [],
       storyboard: [],
+      previewHtml: payload.lesson_plan_path
+        ? undefined
+        : renderDemoDocumentPreviewHtml({
+            label: "Handout",
+            title: `${payload.topic}讲义预览`,
+            fileName: lessonPlanFileName,
+            items: wordSections.map((section) => ({
+              title: section.title,
+              body: section.body,
+            })),
+          }),
       download: payload.lesson_plan_path
         ? {
             fileName: lessonPlanFileName,
@@ -812,8 +1800,9 @@ const generateBackendArtifactsUncached = async ({
           topic,
           project_id: projectId,
           num_pages: numPages,
-          auto_online_image_search: true,
-          auto_ai_image_generation: false,
+          auto_online_image_search: backendAutoOnlineImageSearch,
+          auto_ai_image_generation: backendAutoAiImageGeneration,
+          teaching_plan_markdown: assistantDraft.trim() || undefined,
         }),
       });
 
@@ -853,6 +1842,13 @@ export const resolveExistingBackendArtifactResponse = async ({
   intentDraft: IntentDraft;
   assistantDraft: string;
 }) => {
+  if (demoArtifactModeEnabled) {
+    return resolveExistingDemoArtifactResponse({
+      request,
+      intentDraft,
+    });
+  }
+
   const payload = await resolveExistingBackendPayload({
     request,
     intentDraft,
@@ -883,6 +1879,13 @@ export const resolveLatestCompletedBackendArtifactResponse = async ({
   intentDraft: IntentDraft;
   assistantDraft: string;
 }) => {
+  if (demoArtifactModeEnabled) {
+    return resolveLatestCompletedDemoArtifactResponse({
+      request,
+      intentDraft,
+    });
+  }
+
   const topic = inferTopic(request, intentDraft, assistantDraft);
   const numPages = inferNumPages(intentDraft);
   const payload = await resolveLatestCompletedBackendPayload({
@@ -910,10 +1913,21 @@ export const shouldGenerateCourseware = (
   intentDraft: IntentDraft,
   assistantDraft: string,
 ) => {
+  const hasAssistantDraft = assistantDraft.trim().length > 0;
+  const hasLatestPrompt = request.latestPrompt.trim().length > 0;
+
+  if (demoArtifactModeEnabled) {
+    return triggerAfterAssistant
+      ? hasAssistantDraft
+      : hasLatestPrompt || hasAssistantDraft;
+  }
+
   return (
     intentDraft.confirmed &&
     intentDraft.knowledgePoints.length > 0 &&
-    (assistantDraft.trim().length > 0 || request.latestPrompt.trim().length > 0)
+    (triggerAfterAssistant
+      ? hasAssistantDraft
+      : hasAssistantDraft || hasLatestPrompt)
   );
 };
 
@@ -934,11 +1948,18 @@ export const generateBackendArtifactResponse = async ({
   const cached = generationCache.get(cacheKey);
   if (cached) return cached;
 
-  const task = generateBackendArtifactsUncached({
-    request,
-    intentDraft,
-    assistantDraft,
-  }).catch((error) => {
+  const task = (
+    demoArtifactModeEnabled
+      ? generateDemoArtifactResponseUncached({
+          request,
+          intentDraft,
+        })
+      : generateBackendArtifactsUncached({
+          request,
+          intentDraft,
+          assistantDraft,
+        })
+  ).catch((error) => {
     generationCache.delete(cacheKey);
     throw error;
   });

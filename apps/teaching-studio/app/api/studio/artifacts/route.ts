@@ -12,11 +12,11 @@ import type {
   VideoStoryboardScene,
 } from "@/lib/studio-contract";
 import {
-  buildStableProjectId,
   generateBackendArtifactResponse,
   resolveExistingBackendArtifactResponse,
   shouldGenerateCourseware,
 } from "../_lib/courseware";
+import { backendArtifactRoot } from "../../_lib/backend-paths";
 
 export const maxDuration = 1800;
 
@@ -46,13 +46,14 @@ type GenerationTask = {
 const generationTasks = new Map<string, GenerationTask>();
 const generationTasksByProjectId = new Map<string, GenerationTask>();
 const generationTasksByFingerprint = new Map<string, GenerationTask>();
-const backendArtifactRoot =
-  process.env.TEACHING_BACKEND_ARTIFACT_ROOT ??
-  path.resolve(
-    process.cwd(),
-    "../Smart-Courseware-Agent_backend/backend/app/agent/data_assets/demo_show",
-  );
 const generationLockRoot = path.join(backendArtifactRoot, ".generation-locks");
+const triggerAfterAssistant =
+  (process.env.TEACHING_TRIGGER_AFTER_ASSISTANT ??
+    process.env.NEXT_PUBLIC_TEACHING_TRIGGER_AFTER_ASSISTANT ??
+    "false") === "true";
+const presetArtifactModeEnabled =
+  process.env.TEACHING_PRESET_ARTIFACTS === "true" ||
+  process.env.TEACHING_DEMO_MODE === "true";
 
 const fallbackKnowledgePoints = ["教学主题", "核心知识", "课堂应用"];
 
@@ -164,6 +165,40 @@ const getLatestAssistantDraft = (
     return text;
   }
   return "";
+};
+
+const hasCompletedAssistantReplyAfterLatestUser = (
+  conversation: StudioArtifactRequest["conversation"],
+) => {
+  let latestUserIndex = -1;
+
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    if (conversation[index]?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+
+  if (latestUserIndex === -1) return false;
+
+  for (
+    let index = conversation.length - 1;
+    index > latestUserIndex;
+    index -= 1
+  ) {
+    const turn = conversation[index];
+    if (turn?.role !== "assistant") continue;
+
+    const text = getTurnText(turn).trim();
+    if (!text) continue;
+    if (/^(当前可用上下文还不够|我继续前需要一个关键信息)/.test(text)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  return false;
 };
 
 const getLatestUserConversationText = (
@@ -477,6 +512,49 @@ const tabLabels: Record<ArtifactTab, string> = {
   word: "Word",
 };
 
+const createIdleArtifacts = (): StudioArtifacts => ({
+  "lesson-plan": {
+    tab: "lesson-plan",
+    title: "教案草案",
+    description: "等待智能体完成当前轮回复后再生成教案。",
+    downloadName: "lesson-plan-draft.json",
+    status: "idle",
+    sections: [],
+    slides: [],
+    storyboard: [],
+  },
+  ppt: {
+    tab: "ppt",
+    title: "PPT 预览",
+    description: "等待智能体完成当前轮回复后再生成 PPT。",
+    downloadName: "slides-draft.json",
+    status: "idle",
+    sections: [],
+    slides: [],
+    storyboard: [],
+  },
+  video: {
+    tab: "video",
+    title: "视频脚本",
+    description: "等待智能体完成当前轮回复后再生成视频脚本。",
+    downloadName: "video-storyboard-draft.json",
+    status: "idle",
+    sections: [],
+    slides: [],
+    storyboard: [],
+  },
+  word: {
+    tab: "word",
+    title: "Word 讲义",
+    description: "等待智能体完成当前轮回复后再生成讲义。",
+    downloadName: "word-handout-draft.json",
+    status: "idle",
+    sections: [],
+    slides: [],
+    storyboard: [],
+  },
+});
+
 const buildSummary = (
   intent: IntentDraft,
   activeTab: ArtifactTab,
@@ -492,10 +570,10 @@ const buildSummary = (
   }`;
 };
 
-const buildRequestDigest = (
+const _buildRequestDigest = (
   request: StudioArtifactRequest,
   intentDraft: IntentDraft,
-  assistantDraft: string,
+  _assistantDraft: string,
 ) => {
   const hash = createHash("sha1");
   hash.update(
@@ -582,6 +660,9 @@ const toGeneratingArtifacts = (
   },
 });
 
+const createGeneratingArtifacts = (): StudioArtifacts =>
+  toGeneratingArtifacts(createIdleArtifacts());
+
 const buildGeneratingResponse = (
   request: StudioArtifactRequest,
   intentDraft: IntentDraft,
@@ -589,10 +670,27 @@ const buildGeneratingResponse = (
 ): StudioArtifactResponse => ({
   projectId: request.projectId,
   intentDraft,
-  artifacts: toGeneratingArtifacts(
-    createArtifacts(intentDraft, assistantDraft),
-  ),
-  summary: `已提交真实后端课件生成任务，正在持续生成 ${request.activeTab === "ppt" ? "PPT" : tabLabels[request.activeTab]} 与配套文件，请稍候自动同步完成状态。`,
+  artifacts: presetArtifactModeEnabled
+    ? toGeneratingArtifacts(createArtifacts(intentDraft, assistantDraft))
+    : createGeneratingArtifacts(),
+  summary: `${
+    presetArtifactModeEnabled
+      ? "已启动预设产物模拟生成流程"
+      : "已提交真实后端课件生成任务"
+  }，正在持续生成 ${
+    request.activeTab === "ppt" ? "PPT" : tabLabels[request.activeTab]
+  } 与配套文件，请稍候自动同步完成状态。`,
+});
+
+const buildWaitingForAssistantResponse = (
+  request: StudioArtifactRequest,
+  intentDraft: IntentDraft,
+): StudioArtifactResponse => ({
+  projectId: request.projectId,
+  intentDraft,
+  artifacts: createIdleArtifacts(),
+  summary:
+    "当前轮对话仍在等待智能体回复完成。待左侧助手消息完整出现后，再开始生成 PPT、教案和视频预览。",
 });
 
 const getGenerationLockPath = (projectId: string) =>
@@ -664,7 +762,9 @@ const ensureGenerationTask = async ({
       return existingForFingerprint;
     }
 
-    const lockExists = await hasGenerationLock(existingForFingerprint.projectId);
+    const lockExists = await hasGenerationLock(
+      existingForFingerprint.projectId,
+    );
     const staleForMs = Date.now() - existingForFingerprint.startedAt;
 
     if (lockExists || staleForMs < 30 * 60_000) {
@@ -803,11 +903,6 @@ export async function POST(request: Request) {
   };
   const intentDraft = buildIntentDraft(bodyBase);
   const assistantDraft = getLatestAssistantDraft(bodyBase.conversation);
-  const generatedProjectId = buildStableProjectId(
-    bodyBase,
-    intentDraft,
-    assistantDraft,
-  ).projectId;
 
   const incomingRequest: StudioArtifactRequest = {
     ...bodyBase,
@@ -830,6 +925,24 @@ export async function POST(request: Request) {
     }
   }
 
+  if (
+    incomingRequest.projectId &&
+    (await hasGenerationLock(incomingRequest.projectId))
+  ) {
+    return Response.json(
+      buildGeneratingResponse(incomingRequest, intentDraft, assistantDraft),
+    );
+  }
+
+  if (
+    triggerAfterAssistant &&
+    !hasCompletedAssistantReplyAfterLatestUser(bodyBase.conversation)
+  ) {
+    return Response.json(
+      buildWaitingForAssistantResponse(incomingRequest, intentDraft),
+    );
+  }
+
   if (shouldGenerateCourseware(body, intentDraft, assistantDraft)) {
     const existingFromIncoming = await resolveExistingBackendArtifactResponse({
       request: incomingRequest,
@@ -840,10 +953,15 @@ export async function POST(request: Request) {
     if (existingFromIncoming) {
       return Response.json(existingFromIncoming);
     }
+
     body = incomingRequest;
 
+    const projectId =
+      incomingRequest.projectId ??
+      body.projectId ??
+      `studio-${randomUUID().replace(/-/g, "").slice(0, 13)}`;
     const digest = buildPendingTaskDigest({
-      projectId: incomingProjectId,
+      projectId,
       latestPrompt: body.latestPrompt,
       materials: body.materials,
       intentDraft,
@@ -894,6 +1012,18 @@ export async function POST(request: Request) {
   }
 
   const artifacts = createArtifacts(intentDraft, assistantDraft);
+  if (!presetArtifactModeEnabled) {
+    const response: StudioArtifactResponse = {
+      projectId: incomingRequest.projectId,
+      intentDraft,
+      artifacts: createIdleArtifacts(),
+      summary: hasCompletedAssistantReplyAfterLatestUser(bodyBase.conversation)
+        ? "已接收到左侧对话生成的大纲内容。正式版将等待真实后端课件生成链路返回文件结果，右侧暂不展示本地结构化伪预览。"
+        : "当前轮对话仍在等待智能体回复完成。待左侧助手消息完整出现后，再开始生成 PPT、教案和视频预览。",
+    };
+
+    return Response.json(response);
+  }
 
   const response: StudioArtifactResponse = {
     intentDraft,

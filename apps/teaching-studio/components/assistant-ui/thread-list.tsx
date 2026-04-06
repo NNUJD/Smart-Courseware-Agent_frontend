@@ -14,7 +14,6 @@ import {
   useAssistantRuntime,
   useAuiState,
   useThreadList,
-  useThreadRuntime,
 } from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -45,7 +44,7 @@ export const ThreadList: FC = () => {
 };
 
 const ThreadListNew: FC = () => {
-  const threadRuntime = useThreadRuntime();
+  const assistantRuntime = useAssistantRuntime();
   const resetWorkspace = useStudioStore((state) => state.resetWorkspace);
   const [isResetting, setIsResetting] = useState(false);
 
@@ -53,8 +52,8 @@ const ThreadListNew: FC = () => {
     setIsResetting(true);
 
     try {
-      if (threadRuntime.getState().isRunning) {
-        threadRuntime.cancelRun();
+      if (assistantRuntime.thread.getState().isRunning) {
+        assistantRuntime.thread.cancelRun();
       }
 
       resetWorkspace();

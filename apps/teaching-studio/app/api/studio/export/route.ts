@@ -34,6 +34,9 @@ const inferContentType = (targetPath: string) => {
   if (lowered.endsWith(".docx")) {
     return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   }
+  if (lowered.endsWith(".mp4")) {
+    return "video/mp4";
+  }
   if (lowered.endsWith(".pdf")) {
     return "application/pdf";
   }
@@ -151,9 +154,10 @@ export async function POST(request: Request) {
   const body = JSON.stringify(
     {
       exportedAt: new Date().toISOString(),
-      format: "teaching-studio-placeholder-export",
-      note: "后端接入完成后，可在此导出 pptx、docx、html5、gif、mp4 或打包 zip。",
-      payload,
+      format: "workspace-snapshot",
+      projectId: payload.projectId ?? null,
+      activeArtifact: payload.activeArtifact ?? null,
+      data: payload,
     },
     null,
     2,
@@ -163,7 +167,7 @@ export async function POST(request: Request) {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Content-Disposition":
-        'attachment; filename="teaching-studio-export.json"',
+        'attachment; filename="teaching-studio-workspace.json"',
     },
   });
 }

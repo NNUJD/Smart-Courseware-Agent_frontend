@@ -72,6 +72,10 @@ export const useAISDKRuntime = <UI_MESSAGE extends UIMessage = UIMessage>(
   const toolArgsKeyOrderCacheRef = useRef<Map<string, Map<string, string[]>>>(
     new Map(),
   );
+  const recentSendRef = useRef<{
+    key: string;
+    at: number;
+  } | null>(null);
 
   const hasExecutingTools = Object.values(toolStatuses).some(
     (s) => s?.type === "executing",
@@ -165,6 +169,27 @@ export const useAISDKRuntime = <UI_MESSAGE extends UIMessage = UIMessage>(
     });
   };
 
+  const shouldIgnoreDuplicateSend = (value: unknown) => {
+    let key = "";
+
+    try {
+      key = JSON.stringify(value);
+    } catch {
+      return false;
+    }
+
+    if (!key) return false;
+
+    const now = Date.now();
+    const previous = recentSendRef.current;
+    recentSendRef.current = {
+      key,
+      at: now,
+    };
+
+    return previous?.key === key && now - previous.at < 1500;
+  };
+
   const runtime = useExternalStoreRuntime({
     isRunning,
     messages,
@@ -236,6 +261,10 @@ export const useAISDKRuntime = <UI_MESSAGE extends UIMessage = UIMessage>(
     },
     onNew: async (message) => {
       await completePendingToolCalls();
+
+      if (shouldIgnoreDuplicateSend(message)) {
+        return;
+      }
 
       const createMessage = (
         customToCreateMessage ?? toCreateMessage

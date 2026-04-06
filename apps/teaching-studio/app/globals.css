@@ -54,6 +54,12 @@
 }
 
 :root {
+  --font-ui-sans:
+    "Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+    "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif;
+  --font-ui-mono:
+    "IBM Plex Mono", "JetBrains Mono", "Cascadia Code", "SFMono-Regular",
+    Consolas, "Liberation Mono", monospace;
   --radius: 0.625rem;
   --background: oklch(0.978 0.012 95.6);
   --foreground: oklch(0.237 0.029 238.4);

@@ -19,6 +19,7 @@ const MarkdownTextImpl = () => {
   return (
     <MarkdownTextPrimitive
       remarkPlugins={[remarkGfm]}
+      smooth={false}
       className="aui-md"
       components={defaultComponents}
     />

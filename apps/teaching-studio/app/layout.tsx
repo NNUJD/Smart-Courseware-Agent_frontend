@@ -16,8 +16,8 @@ const plexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "教学课件智能工坊",
-  description: "面向教师的多轮澄清、资料绑定与课件预览工作台",
+  title: "智源万象",
+  description: "智源万象 AI 教学智能助手",
 };
 
 export default function RootLayout({

@@ -1,5 +1,4 @@
 "use client";
-
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type {
@@ -73,6 +72,24 @@ const createIdleArtifacts = (): StudioArtifacts => ({
     "等待资料解析完成后生成讲义正文。",
     "handout-draft.json",
   ),
+});
+
+const SAMPLE_PDF_PATH =
+  "C:\\Users\\陈韦烨\\Documents\\trae_projects\\teacher_studio\\Smart-Courseware-Agent_backend_main\\test_files\\test_with_text.pdf";
+
+const createSamplePptArtifact = (): ArtifactPreview => ({
+  ...createIdleArtifact(
+    "ppt",
+    "PPT 预览",
+    "工作台样例 PDF 预览。",
+    "test_with_text.pdf",
+  ),
+  status: "ready",
+  download: {
+    fileName: "test_with_text.pdf",
+    contentType: "application/pdf",
+    localPath: SAMPLE_PDF_PATH,
+  },
 });
 
 const hasArtifactRenderableContent = (artifact: ArtifactPreview) =>
@@ -205,13 +222,16 @@ const sanitizeConversationHistory = (
 };
 
 const createInitialWorkspaceState = () => ({
-  activeArtifact: "lesson-plan" as ArtifactTab,
+  activeArtifact: "ppt" as ArtifactTab,
   selectedNodeIds: {} as Partial<Record<ArtifactTab, string>>,
   isSyncing: false,
   previewSummary: defaultPreviewSummary,
   intentDraft: createEmptyIntentDraft(),
   materials: [] as StudioMaterial[],
-  artifacts: createIdleArtifacts(),
+  artifacts: {
+    ...createIdleArtifacts(),
+    ppt: createSamplePptArtifact(),
+  },
   currentProjectId: "",
   latestPrompt: "",
   conversation: [] as StudioConversationTurn[],
@@ -452,6 +472,16 @@ export const useStudioStore = create<StudioState>()(
         state.latestPrompt =
           state.conversation.filter((turn) => turn.role === "user").at(-1)
             ?.text ?? state.latestPrompt;
+        if (
+          !state.currentProjectId &&
+          !hasArtifactRenderableContent(state.artifacts.ppt)
+        ) {
+          state.artifacts = {
+            ...state.artifacts,
+            ppt: createSamplePptArtifact(),
+          };
+          state.activeArtifact = "ppt";
+        }
       },
     },
   ),

@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { access, mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { backendArtifactRoot } from "../../_lib/backend-paths";
 
 const execFileAsync = promisify(execFile);
 
@@ -76,10 +75,15 @@ const convertToPdf = async (sourcePath: string, previewDir: string) => {
 
 const resolveSafeArtifactPath = (input: string) => {
   const resolved = path.resolve(input);
-  const allowedRoot = path.resolve(backendArtifactRoot);
+  const extension = path.extname(resolved).toLowerCase();
+  const allowedExtensions = new Set([".pdf", ".pptx", ".docx"]);
 
-  if (!resolved.startsWith(`${allowedRoot}${path.sep}`)) {
-    throw new Error("preview_path_not_allowed");
+  if (!path.isAbsolute(resolved)) {
+    throw new Error("preview_path_not_absolute");
+  }
+
+  if (!allowedExtensions.has(extension)) {
+    throw new Error("preview_file_type_not_supported");
   }
 
   return resolved;

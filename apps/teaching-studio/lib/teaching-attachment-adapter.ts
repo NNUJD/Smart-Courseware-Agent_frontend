@@ -7,7 +7,7 @@ import type {
 } from "@assistant-ui/core";
 
 export const teachingAttachmentAccept =
-  "image/*,video/*,application/pdf,.doc,.docx,.ppt,.pptx,text/plain,text/markdown,.md";
+  "image/*,video/*,audio/*,.mp3,.wav,.flac,.ogg,.m4a,.wma,.aac,application/pdf,.doc,.docx,.ppt,.pptx,text/plain,text/markdown,.md";
 
 const readAsDataUrl = (file: File) =>
   new Promise<string>((resolve, reject) => {

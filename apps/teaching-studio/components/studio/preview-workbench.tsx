@@ -150,6 +150,7 @@ export const PreviewWorkbench = () => {
         name: material.name,
         mimeType: material.mimeType,
         size: material.size,
+        storedPath: material.storedPath,
         role: material.role,
         linkedKnowledgePoints: material.linkedKnowledgePoints,
         note: material.note,
@@ -661,34 +662,15 @@ export const PreviewWorkbench = () => {
               "h-screen w-screen rounded-none border-0 p-6 shadow-none",
           )}
         >
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-muted-foreground text-xs">当前查看</p>
-              <h3 className="font-semibold text-lg">{previewHeading}</h3>
-            </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              className="rounded-full"
-              disabled={!hasPreview}
-              onClick={() => void handleToggleFullscreen()}
-            >
-              {isFullscreen ? (
-                <Minimize2 className="size-4" />
-              ) : (
-                <Expand className="size-4" />
-              )}
-              {isFullscreen ? "退出全屏" : "放大预览"}
-            </Button>
-          </div>
-
           <ArtifactPreviewSurface
             activeArtifact={activeArtifact}
             artifact={artifact}
             currentScene={currentScene}
             currentSection={currentSection}
             currentSlide={currentSlide}
+            hasPreview={hasPreview}
+            isFullscreen={isFullscreen}
+            onToggleFullscreen={handleToggleFullscreen}
             expanded={isFullscreen}
           />
         </main>
@@ -703,6 +685,9 @@ type ArtifactPreviewSurfaceProps = {
   currentSection?: PreviewSection;
   currentSlide?: PreviewSlide;
   currentScene?: VideoStoryboardScene;
+  hasPreview?: boolean;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
   expanded?: boolean;
 };
 
@@ -712,6 +697,9 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
   currentSection,
   currentSlide,
   currentScene,
+  hasPreview = false,
+  isFullscreen = false,
+  onToggleFullscreen,
   expanded = false,
 }) => {
   const filePreviewUrl = buildFilePreviewUrl(artifact.download?.localPath);
@@ -792,81 +780,57 @@ const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
     return (
       <div
         className={cn(
-          "flex h-full flex-col gap-3",
+          "flex h-full min-h-0 flex-col gap-3 overflow-hidden",
           expanded ? "min-h-[78vh]" : "min-h-[560px]",
         )}
       >
-        <div className="relative flex-1 overflow-hidden rounded-[30px] border border-border/70 bg-[radial-gradient(circle_at_top,rgba(125,211,252,0.16),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.98))] shadow-sm">
-          <div className="border-border/60 border-b px-4 py-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <h3 className="font-semibold text-lg">{artifact.title}</h3>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700 text-xs">
-                  <CheckCircle2 className="size-3.5" />
-                  已生成完成
-                </span>
-                <span className="inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs">
-                  {artifact.downloadName}
-                </span>
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[30px] border border-border/70 bg-[radial-gradient(circle_at_top,rgba(125,211,252,0.16),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.98))] shadow-sm">
+          <div className="border-border/60 border-b px-4 py-3">
+            <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3">
+              <div className="min-w-0 text-base font-semibold">
+                当前查看 {artifact.downloadName}
               </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-full"
-                onClick={() => void handleDirectExport()}
-                disabled={isFileExporting}
-              >
-                {isFileExporting ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <Download className="size-4" />
-                )}
-                下载文件
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-full"
-                onClick={handlePrintPreview}
-              >
-                <Printer className="size-4" />
-                打印预览
-              </Button>
-              <Button
-                asChild
-                type="button"
-                variant="outline"
-                className="rounded-full"
-              >
-                <Link href={filePreviewUrl} target="_blank" rel="noreferrer">
-                  <ExternalLink className="size-4" />
-                  新窗口查看
-                </Link>
-              </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={() => void handleDirectExport()}
+                  disabled={isFileExporting}
+                >
+                  {isFileExporting ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Download className="size-4" />
+                  )}
+                  下载文件
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  disabled={!hasPreview}
+                  onClick={() => onToggleFullscreen?.()}
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className="size-4" />
+                  ) : (
+                    <Expand className="size-4" />
+                  )}
+                  {isFullscreen ? "退出全屏" : "放大预览"}
+                </Button>
+              </div>
             </div>
           </div>
 
-          <div className="p-3">
-            <div className="mb-3 flex items-center gap-2 px-2">
-              <span className="size-2.5 rounded-full bg-rose-400/90" />
-              <span className="size-2.5 rounded-full bg-amber-400/90" />
-              <span className="size-2.5 rounded-full bg-emerald-400/90" />
-              <div className="ml-2 flex-1 rounded-full border border-border/60 bg-background/80 px-3 py-1 text-muted-foreground text-xs">
-                {artifact.downloadName}
-              </div>
-            </div>
-
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
             <iframe
               ref={iframeRef}
               title={`${artifact.title}真实文件预览`}
               src={filePreviewUrl}
               className={cn(
-                "w-full rounded-[22px] border border-border/70 bg-white shadow-inner",
-                expanded ? "min-h-[70vh]" : "min-h-[480px]",
+                "min-h-0 w-full flex-1 rounded-[22px] border border-border/70 bg-white shadow-inner",
+                expanded ? "h-[70vh]" : "h-[480px]",
               )}
             />
           </div>

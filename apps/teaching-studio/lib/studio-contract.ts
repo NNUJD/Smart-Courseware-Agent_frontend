@@ -19,6 +19,7 @@ export type StudioMaterial = {
   name: string;
   mimeType: string;
   size: number;
+  storedPath?: string;
   role: MaterialRole;
   linkedKnowledgePoints: string[];
   note: string;
@@ -103,6 +104,7 @@ export type StudioArtifactRequest = {
       | "name"
       | "mimeType"
       | "size"
+      | "storedPath"
       | "role"
       | "linkedKnowledgePoints"
       | "note"

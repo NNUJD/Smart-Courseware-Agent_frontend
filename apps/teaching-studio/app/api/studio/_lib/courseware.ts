@@ -82,6 +82,7 @@ const demoDelayMs = Math.max(
   Number(process.env.TEACHING_DEMO_DELAY_MS ?? "12000") || 12000,
 );
 const backendCoursewareEndpoint = `${backendBaseUrl.replace(/\/$/, "")}/api/v1/courseware/generate`;
+const backendCoursewareUploadEndpoint = `${backendBaseUrl.replace(/\/$/, "")}/api/v1/courseware/generate/upload`;
 const demoTemplateRoot = path.join(backendArtifactRoot, ".demo_templates");
 const demoVariantKeywords =
   /(修改|调整|优化|改一下|改版|重做|补充|更新|细化|重新生成|第二版|新版)/;
@@ -538,6 +539,60 @@ const buildGenerationCacheKey = (
     }),
   );
   return hash.digest("hex");
+};
+
+const buildMultimodalMaterialMessage = (
+  request: StudioArtifactRequest,
+  assistantDraft: string,
+) => {
+  const baseInstruction =
+    assistantDraft.trim() ||
+    request.latestPrompt.trim() ||
+    "请结合上传素材生成课件。";
+  const materialNotes = request.materials
+    .map((material, index) => {
+      const detailParts = [
+        material.role ? `用途：${material.role}` : "",
+        material.linkedKnowledgePoints.length > 0
+          ? `关联知识点：${material.linkedKnowledgePoints.join("、")}`
+          : "",
+        material.note ? `补充说明：${material.note}` : "",
+      ].filter(Boolean);
+
+      return detailParts.length > 0
+        ? `${index + 1}. ${material.name}；${detailParts.join("；")}`
+        : "";
+    })
+    .filter(Boolean);
+
+  if (materialNotes.length === 0) {
+    return baseInstruction;
+  }
+
+  return `${baseInstruction}\n\n请同时结合以下素材说明生成课件：\n${materialNotes.join("\n")}`;
+};
+
+const resolveUsableMultimodalMaterials = async (
+  materials: StudioArtifactRequest["materials"],
+) => {
+  const resolved = await Promise.all(
+    materials.map(async (material) => {
+      if (!material.storedPath) return null;
+
+      try {
+        const fileBuffer = await readFile(material.storedPath);
+        return {
+          name: material.name,
+          mimeType: material.mimeType || "application/octet-stream",
+          buffer: fileBuffer,
+        };
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  return resolved.filter((material) => material !== null);
 };
 
 export const buildStableProjectId = (
@@ -1786,6 +1841,9 @@ const generateBackendArtifactsUncached = async ({
     intentDraft,
     assistantDraft,
   });
+  const multimodalMaterials = await resolveUsableMultimodalMaterials(
+    request.materials,
+  );
   const payload =
     existingPayload ??
     (await (async () => {
@@ -1793,18 +1851,51 @@ const generateBackendArtifactsUncached = async ({
         request.projectId ||
         buildStableProjectId(request, intentDraft, assistantDraft).projectId;
 
-      const backendResponse = await fetch(backendCoursewareEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          topic,
-          project_id: projectId,
-          num_pages: numPages,
-          auto_online_image_search: backendAutoOnlineImageSearch,
-          auto_ai_image_generation: backendAutoAiImageGeneration,
-          teaching_plan_markdown: assistantDraft.trim() || undefined,
-        }),
-      });
+      const backendResponse =
+        multimodalMaterials.length > 0
+          ? await (async () => {
+              const formData = new FormData();
+              formData.append("topic", topic);
+              formData.append("project_id", projectId);
+              formData.append("num_pages", String(numPages));
+              formData.append(
+                "auto_online_image_search",
+                String(backendAutoOnlineImageSearch),
+              );
+              formData.append(
+                "auto_ai_image_generation",
+                String(backendAutoAiImageGeneration),
+              );
+              formData.append(
+                "message",
+                buildMultimodalMaterialMessage(request, assistantDraft),
+              );
+
+              for (const material of multimodalMaterials) {
+                formData.append(
+                  "files",
+                  new Blob([material.buffer], { type: material.mimeType }),
+                  material.name,
+                );
+              }
+
+              return fetch(backendCoursewareUploadEndpoint, {
+                method: "POST",
+                body: formData,
+              });
+            })()
+          : await fetch(backendCoursewareEndpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                topic,
+                project_id: projectId,
+                num_pages: numPages,
+                auto_online_image_search: backendAutoOnlineImageSearch,
+                auto_ai_image_generation: backendAutoAiImageGeneration,
+                teaching_plan_markdown: assistantDraft.trim() || undefined,
+              }),
+            });
 
       if (!backendResponse.ok) {
         const detail = await backendResponse.text();

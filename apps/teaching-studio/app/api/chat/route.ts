@@ -37,6 +37,14 @@ type BackendChatResponse = {
   suggested_tools?: string[];
 };
 
+type BackendAttachment = {
+  type: "image" | "video" | "audio" | "file";
+  url?: string;
+  base64_data?: string;
+  mime_type?: string;
+  filename?: string;
+};
+
 const demoAssistantReplies: Record<DemoVariant, string> = {
   v1: [
     "已按你当前提供的素材整理出《浮力》首版方案，接下来会生成与首版 PPT 一致的课件和教案。",
@@ -128,16 +136,108 @@ const getMessageText = (message: UIMessage): string => {
     .trim();
 };
 
-const getLatestUserMessage = (messages: UIMessage[]): string => {
+const getMessageParts = (
+  message: UIMessage,
+): Array<Record<string, unknown>> => {
+  const parts = (message as { parts?: Array<Record<string, unknown>> }).parts;
+  return Array.isArray(parts) ? parts : [];
+};
+
+const getLatestUserMessageRecord = (messages: UIMessage[]) => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.role !== "user") continue;
-
-    const text = getMessageText(message);
-    if (text) return text;
+    if (message?.role === "user") {
+      return message;
+    }
   }
 
-  return "";
+  return undefined;
+};
+
+const parseDataUrl = (input: string) => {
+  const match = input.match(/^data:([^;,]+)?;base64,([\s\S]+)$/);
+  if (!match) return null;
+
+  return {
+    mimeType: match[1] || "application/octet-stream",
+    base64Data: match[2],
+  };
+};
+
+const inferAttachmentType = (
+  mimeType: string,
+  fileName: string,
+): BackendAttachment["type"] => {
+  const lowered = fileName.toLowerCase();
+
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (
+    mimeType === "application/pdf" ||
+    lowered.endsWith(".doc") ||
+    lowered.endsWith(".docx") ||
+    lowered.endsWith(".ppt") ||
+    lowered.endsWith(".pptx") ||
+    lowered.endsWith(".txt") ||
+    lowered.endsWith(".md")
+  ) {
+    return "file";
+  }
+
+  return "file";
+};
+
+const buildBackendAttachments = (message: UIMessage): BackendAttachment[] => {
+  const attachments: BackendAttachment[] = [];
+
+  for (const part of getMessageParts(message)) {
+    if (part?.type !== "file" || typeof part?.url !== "string") continue;
+
+    const url = part.url.trim();
+    if (!url) continue;
+
+    const fileName =
+      typeof part.filename === "string" && part.filename.trim()
+        ? part.filename.trim()
+        : "attachment";
+    const mimeType =
+      typeof part.mediaType === "string" && part.mediaType.trim()
+        ? part.mediaType.trim()
+        : "";
+    const attachmentType = inferAttachmentType(mimeType, fileName);
+    const parsedDataUrl = parseDataUrl(url);
+
+    if (attachmentType === "image" || attachmentType === "video") {
+      attachments.push({
+        type: attachmentType,
+        url,
+        mime_type:
+          parsedDataUrl?.mimeType || mimeType || "application/octet-stream",
+        filename: fileName,
+      });
+      continue;
+    }
+
+    if (parsedDataUrl) {
+      attachments.push({
+        type: attachmentType,
+        base64_data: parsedDataUrl.base64Data,
+        mime_type: parsedDataUrl.mimeType,
+        filename: fileName,
+      });
+      continue;
+    }
+
+    attachments.push({
+      type: attachmentType,
+      url,
+      mime_type: mimeType || "application/octet-stream",
+      filename: fileName,
+    });
+  }
+
+  return attachments;
 };
 
 const resolveDemoVariant = (
@@ -232,12 +332,14 @@ const createBackendTextStreamResponse = ({
   sessionId,
   userId,
   structuredContext,
+  attachments,
   messageMetadata,
 }: {
   latestUserMessage: string;
   sessionId?: string;
   userId: string;
   structuredContext: Record<string, unknown>;
+  attachments: BackendAttachment[];
   messageMetadata?: Record<string, unknown>;
 }) => {
   const stream = createUIMessageStream({
@@ -256,6 +358,7 @@ const createBackendTextStreamResponse = ({
             session_id: sessionId,
             user_id: userId,
             message: latestUserMessage,
+            attachments,
             structured_context: structuredContext,
             debug: true,
           }),
@@ -294,6 +397,7 @@ const createBackendTextStreamResponse = ({
             sessionId,
             userId,
             structuredContext,
+            attachments,
           });
           const answer = buildFinalAnswer(payload);
 
@@ -359,6 +463,7 @@ const createBackendTextStreamResponse = ({
                 sessionId,
                 userId,
                 structuredContext,
+                attachments,
               });
               const answer = buildFinalAnswer(payload);
 
@@ -381,6 +486,7 @@ const createBackendTextStreamResponse = ({
             sessionId,
             userId,
             structuredContext,
+            attachments,
           });
           const answer = buildFinalAnswer(payload);
 
@@ -470,11 +576,13 @@ const fetchBackendChatResponse = async ({
   sessionId,
   userId,
   structuredContext,
+  attachments,
 }: {
   latestUserMessage: string;
   sessionId?: string;
   userId: string;
   structuredContext: Record<string, unknown>;
+  attachments: BackendAttachment[];
 }) => {
   const backendResponse = await fetch(backendChatEndpoint, {
     method: "POST",
@@ -483,6 +591,7 @@ const fetchBackendChatResponse = async ({
       session_id: sessionId,
       user_id: userId,
       message: latestUserMessage,
+      attachments,
       structured_context: structuredContext,
       debug: true,
     }),
@@ -500,8 +609,19 @@ export async function POST(req: Request) {
   const body = (await req.json()) as Record<string, unknown>;
   const messages = (body.messages ?? []) as UIMessage[];
 
-  const latestUserMessage = getLatestUserMessage(messages);
-  if (!latestUserMessage) {
+  const latestUserRecord = getLatestUserMessageRecord(messages);
+  const latestUserMessage = latestUserRecord
+    ? getMessageText(latestUserRecord)
+    : "";
+  const latestUserAttachments = latestUserRecord
+    ? buildBackendAttachments(latestUserRecord)
+    : [];
+  const resolvedLatestUserMessage =
+    latestUserMessage || latestUserAttachments.length > 0
+      ? latestUserMessage || "请理解并分析这些内容"
+      : "";
+
+  if (!resolvedLatestUserMessage) {
     return Response.json(
       { error: "missing_user_message", detail: "No user message found." },
       { status: 400 },
@@ -532,9 +652,10 @@ export async function POST(req: Request) {
 
     if (demoChatMode !== "template") {
       return createBackendTextStreamResponse({
-        latestUserMessage,
+        latestUserMessage: resolvedLatestUserMessage,
         sessionId,
         userId,
+        attachments: latestUserAttachments,
         structuredContext: buildDemoStructuredContext({
           body,
           variant,
@@ -564,9 +685,10 @@ export async function POST(req: Request) {
   const structuredContext = buildFrontendStructuredContext(body);
 
   return createBackendTextStreamResponse({
-    latestUserMessage,
+    latestUserMessage: resolvedLatestUserMessage,
     sessionId,
     userId,
+    attachments: latestUserAttachments,
     structuredContext,
   });
 }

@@ -60,6 +60,7 @@ export const MaterialBindingPanel = () => {
           name: payload.material.name,
           mimeType: payload.material.mimeType,
           size: payload.material.size,
+          storedPath: payload.material.storedPath,
           createdAt: payload.material.createdAt,
           parseSummary: payload.material.parseSummary,
           status: payload.material.status,

@@ -2,10 +2,14 @@ import type {
   MaterialRole,
   MaterialUploadResponse,
 } from "@/lib/studio-contract";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { backendArtifactRoot } from "../../../_lib/backend-paths";
 
 const backendBaseUrl =
   process.env.TEACHING_BACKEND_BASE_URL ?? "http://127.0.0.1:8000";
 const backendIngestEndpoint = `${backendBaseUrl.replace(/\/$/, "")}/api/v1/knowledge/upload-and-ingest`;
+const materialUploadRoot = path.join(backendArtifactRoot, ".studio-materials");
 
 const backendIngestableSuffixes = new Set([
   ".pdf",
@@ -70,6 +74,7 @@ const buildMaterialResponse = ({
   name,
   mimeType,
   size,
+  storedPath,
   parseSummary,
   suggestedRole,
 }: {
@@ -77,6 +82,7 @@ const buildMaterialResponse = ({
   name: string;
   mimeType: string;
   size: number;
+  storedPath: string;
   parseSummary: string;
   suggestedRole: MaterialRole;
 }): MaterialUploadResponse => ({
@@ -85,12 +91,26 @@ const buildMaterialResponse = ({
     name,
     mimeType,
     size,
+    storedPath,
     createdAt: new Date().toISOString(),
     status: "ready",
     parseSummary,
     suggestedRole,
   },
 });
+
+const sanitizeFileName = (fileName: string) => {
+  const withoutReservedChars = fileName.trim().replace(/[<>:"/\\|?*]/g, "_");
+  const normalized = Array.from(withoutReservedChars)
+    .filter((char) => char >= " ")
+    .join("");
+  return normalized || "material";
+};
+
+const buildStoredFilePath = (id: string, fileName: string) => {
+  const safeName = sanitizeFileName(fileName);
+  return path.join(materialUploadRoot, `${id}-${safeName}`);
+};
 
 export async function POST(request: Request) {
   const formData = await request.formData();
@@ -103,6 +123,11 @@ export async function POST(request: Request) {
   const suggestedRole = inferSuggestedRole(file.name, file.type);
   const id = crypto.randomUUID();
   const mimeType = file.type || "application/octet-stream";
+  await mkdir(materialUploadRoot, { recursive: true });
+
+  const storedPath = buildStoredFilePath(id, file.name);
+  const fileBuffer = Buffer.from(await file.arrayBuffer());
+  await writeFile(storedPath, fileBuffer);
 
   if (!canIngestWithBackend(file.name)) {
     return Response.json(
@@ -111,6 +136,7 @@ export async function POST(request: Request) {
         name: file.name,
         mimeType,
         size: file.size,
+        storedPath,
         parseSummary: buildFallbackSummary(file.name, mimeType),
         suggestedRole,
       }),
@@ -145,6 +171,7 @@ export async function POST(request: Request) {
       name: file.name,
       mimeType,
       size: file.size,
+      storedPath,
       parseSummary,
       suggestedRole,
     }),

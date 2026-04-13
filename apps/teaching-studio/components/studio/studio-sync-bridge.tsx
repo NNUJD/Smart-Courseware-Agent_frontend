@@ -181,6 +181,7 @@ export const StudioSyncBridge = () => {
     name: material.name,
     mimeType: material.mimeType,
     size: material.size,
+    storedPath: material.storedPath,
     role: material.role,
     linkedKnowledgePoints: material.linkedKnowledgePoints,
     note: material.note,
@@ -210,6 +211,7 @@ export const StudioSyncBridge = () => {
           [
             material.id,
             material.role,
+            material.storedPath ?? "",
             material.linkedKnowledgePoints.join("|"),
             material.note,
             material.parseSummary,

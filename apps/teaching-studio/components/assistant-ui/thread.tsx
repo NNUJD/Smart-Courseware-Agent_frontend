@@ -72,10 +72,10 @@ export const Thread: FC = () => {
 
   return (
     <ThreadPrimitive.Root
-      className="flex h-full min-h-0 flex-col bg-transparent"
+      className="flex h-full flex-col bg-transparent"
       style={{ ["--thread-max-width" as string]: "100%" }}
     >
-      <ThreadPrimitive.Viewport className="relative flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-4">
+      <ThreadPrimitive.Viewport className="relative flex flex-1 flex-col overflow-y-auto px-4 pt-4">
         <ThreadPrimitive.If empty>
           <ThreadWelcome />
         </ThreadPrimitive.If>
@@ -87,25 +87,25 @@ export const Thread: FC = () => {
             EditComposer,
           }}
         />
-      </ThreadPrimitive.Viewport>
 
-      <div
-        className="mx-auto flex w-full max-w-(--thread-max-width) flex-none flex-col gap-2 bg-linear-to-b from-transparent via-background/96 to-background px-4 pb-4"
-        style={{ paddingTop: contextGap }}
-      >
-        <div className="flex items-center justify-center py-1">
-          <button
-            type="button"
-            onPointerDown={handleResizeContextGap}
-            className="inline-flex h-5 w-14 cursor-row-resize items-center justify-center rounded-full border border-border/70 bg-background/85 text-muted-foreground transition-colors hover:text-foreground"
-            aria-label="调整消息区与输入区间距"
-          >
-            <GripHorizontalIcon className="size-3.5" />
-          </button>
-        </div>
-        <ThreadScrollToBottom />
-        <Composer />
-      </div>
+        <ThreadPrimitive.ViewportFooter
+          className="sticky bottom-0 mx-auto mt-auto flex w-full max-w-(--thread-max-width) flex-col gap-2 bg-linear-to-b from-transparent via-background/96 to-background pb-4"
+          style={{ paddingTop: contextGap }}
+        >
+          <div className="flex items-center justify-center py-1">
+            <button
+              type="button"
+              onPointerDown={handleResizeContextGap}
+              className="inline-flex h-5 w-14 cursor-row-resize items-center justify-center rounded-full border border-border/70 bg-background/85 text-muted-foreground transition-colors hover:text-foreground"
+              aria-label="上下拖拽调整上下文区域"
+            >
+              <GripHorizontalIcon className="size-3.5" />
+            </button>
+          </div>
+          <ThreadScrollToBottom />
+          <Composer />
+        </ThreadPrimitive.ViewportFooter>
+      </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
   );
 };
@@ -119,7 +119,7 @@ const ThreadWelcome: FC = () => {
         <div className="inline-flex w-fit items-center gap-2 rounded-full border border-primary/30 bg-primary/5 px-3 py-1 text-primary text-xs">
           已恢复上次会话内容
         </div>
-        <div className="mt-4 flex flex-1 flex-col gap-3 pr-1">
+        <div className="mt-4 flex flex-1 flex-col gap-3 overflow-y-auto pr-1">
           {persistedConversation.map((message, index) => {
             const isAssistant = message.role === "assistant";
             return (
@@ -158,7 +158,8 @@ const ThreadWelcome: FC = () => {
         这节课要生成什么成果？
       </h1>
       <p className="mt-3 max-w-2xl text-base text-muted-foreground leading-7">
-        直接输入教学目标、知识点、课时、班级学情和产出风格，或先上传教材、PDF、PPT、图片、视频作为参考。系统会主动追问缺失信息，并在右侧实时预览教案、PPT、视频和
+        直接输入教学目标、知识点、时长、班级学情和产出风格，或先上传教材、
+        PDF、PPT、图片、视频作为参考。系统会主动追问缺失信息，并在右侧实时预览教案、PPT、视频和
         Word 结果。
       </p>
       <div className="mt-6 grid gap-3 md:grid-cols-3">
@@ -171,7 +172,7 @@ const ThreadWelcome: FC = () => {
           description="上传教材、现有 PPT 或教学设计，提取可用知识点和版式。"
         />
         <WelcomeCard
-          title="局部修改再生成"
+          title="局部修改再生"
           description="围绕某页、某段或某个案例提出修改意见，局部调整输出。"
         />
       </div>

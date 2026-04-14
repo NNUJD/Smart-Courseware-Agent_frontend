@@ -6,10 +6,10 @@
   --line: rgba(22, 55, 64, 0.12);
   --panel: rgba(255, 251, 244, 0.8);
   --panel-deep: rgba(255, 255, 255, 0.56);
-  --frame-top: rgba(245, 239, 228, 0.94);
-  --frame-bottom: rgba(232, 220, 199, 0.76);
-  --card-top: rgba(250, 244, 234, 0.92);
-  --card-bottom: rgba(239, 229, 214, 0.78);
+  --frame-top: rgba(255, 252, 248, 0.94);
+  --frame-bottom: rgba(248, 246, 239, 0.88);
+  --card-top: rgba(248, 246, 239, 0.94);
+  --card-bottom: rgba(240, 239, 232, 0.86);
   --teal: #0f7c86;
   --teal-deep: #0b4d63;
   --teal-soft: #e0f1f2;
@@ -43,9 +43,9 @@ body {
   color: var(--ink);
   font-family: "Trebuchet MS", "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(15, 124, 134, 0.18), transparent 28%),
-    radial-gradient(circle at 88% 15%, rgba(211, 155, 87, 0.16), transparent 24%),
-    linear-gradient(180deg, #f9f5ef 0%, #efe6d8 52%, #e8dece 100%);
+    radial-gradient(circle at 18% 15%, rgba(103, 190, 206, 0.28), transparent 32%),
+    radial-gradient(circle at 86% 20%, rgba(244, 193, 113, 0.22), transparent 30%),
+    linear-gradient(180deg, #f8f6ef 0%, #f0efe8 100%);
 }
 
 .page-shell {
@@ -313,8 +313,8 @@ input[type="range"] {
   padding: 16px;
   border-radius: 30px;
   background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.38), transparent 52%),
-    linear-gradient(180deg, rgba(246, 239, 228, 0.94), rgba(232, 220, 199, 0.68));
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.32), transparent 52%),
+    linear-gradient(180deg, rgba(255, 252, 248, 0.92), rgba(248, 246, 239, 0.82));
 }
 
 .river-shell.is-splashing {
@@ -330,7 +330,7 @@ input[type="range"] {
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 16px;
-  background: linear-gradient(180deg, rgba(250, 244, 234, 0.9), rgba(239, 229, 214, 0.78));
+  background: linear-gradient(180deg, rgba(248, 246, 239, 0.94), rgba(240, 239, 232, 0.86));
 }
 
 .river-caption span {
@@ -865,7 +865,7 @@ input[type="range"] {
   padding: 8px 11px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(250, 244, 234, 0.9), rgba(239, 229, 214, 0.78));
+  background: linear-gradient(180deg, rgba(248, 246, 239, 0.94), rgba(240, 239, 232, 0.86));
   font-size: 0.8rem;
 }
 

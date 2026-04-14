@@ -73,29 +73,48 @@
         </div>
 
         <div class="simulation-stage">
-          <div class="tank-area">
-            <div id="tankShell" class="tank-shell">
-              <div class="scale-plate">
+          <div class="river-area">
+            <div id="riverShell" class="river-shell">
+              <div class="river-caption">
                 <span>现象观察区</span>
                 <strong id="statusSummary">物体密度小于液体密度，试块漂浮。</strong>
               </div>
 
-              <div class="tank">
-                <div class="tank-ruler">
-                  <span>0%</span>
-                  <span>25%</span>
-                  <span>50%</span>
-                  <span>75%</span>
-                  <span>100%</span>
+              <div class="river-stage">
+                <div class="sky-glow"></div>
+                <div class="sun-halo"></div>
+                <div class="cloud cloud-a"></div>
+                <div class="cloud cloud-b"></div>
+                <div class="cloud cloud-c"></div>
+                <div class="bank bank-left"></div>
+                <div class="bank bank-right"></div>
+
+                <div class="river-depth">
+                  <span>浅滩</span>
+                  <span>中段</span>
+                  <span>深水</span>
                 </div>
                 <div id="waterFill" class="water-fill"></div>
                 <div class="water-surface"></div>
-                <div id="objectBlock" class="object-block floating">试块</div>
+                <div class="current current-a"></div>
+                <div class="current current-b"></div>
+                <div class="current current-c"></div>
+                <div class="reed reed-a"></div>
+                <div class="reed reed-b"></div>
+                <div class="reed reed-c"></div>
+                <div class="rock rock-a"></div>
+                <div class="rock rock-b"></div>
+                <div id="splashRing" class="splash-ring"></div>
+                <div id="splashDroplets" class="splash-droplets">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+                <div id="objectBlock" class="river-item floating" data-item="block">试块</div>
                 <div id="buoyancyArrow" class="force-arrow force-up"><span>F浮</span></div>
                 <div id="gravityArrow" class="force-arrow force-down"><span>G</span></div>
-                <div class="bubble bubble-a"></div>
-                <div class="bubble bubble-b"></div>
-                <div class="bubble bubble-c"></div>
               </div>
             </div>
 

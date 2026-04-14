@@ -45,12 +45,14 @@ const stateBadge = document.getElementById("stateBadge");
 const objectBlock = document.getElementById("objectBlock");
 const buoyancyArrow = document.getElementById("buoyancyArrow");
 const gravityArrow = document.getElementById("gravityArrow");
-const tankShell = document.getElementById("tankShell");
+const riverShell = document.getElementById("riverShell");
 const waterFill = document.getElementById("waterFill");
 const rerunButton = document.getElementById("rerunButton");
 const presetButtons = Array.from(document.querySelectorAll(".preset-button"));
 
 const G = 9.8;
+
+let animationTimer = 0;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -78,7 +80,7 @@ function colorForObjectDensity(density) {
   };
 }
 
-function setPreset(name) {
+function setPreset(name, { animate = true } = {}) {
   const preset = presets[name];
   if (!preset) {
     return;
@@ -93,21 +95,27 @@ function setPreset(name) {
   });
 
   updateSimulation();
+
+  if (animate) {
+    rerunAnimation();
+  }
 }
 
 function rerunAnimation() {
-  tankShell.classList.remove("is-rerunning");
-  objectBlock.classList.remove("is-kicked");
+  window.clearTimeout(animationTimer);
 
-  void tankShell.offsetWidth;
+  riverShell.classList.remove("is-splashing");
+  objectBlock.classList.remove("is-thrown");
 
-  tankShell.classList.add("is-rerunning");
-  objectBlock.classList.add("is-kicked");
+  void riverShell.offsetWidth;
 
-  window.setTimeout(() => {
-    tankShell.classList.remove("is-rerunning");
-    objectBlock.classList.remove("is-kicked");
-  }, 900);
+  riverShell.classList.add("is-splashing");
+  objectBlock.classList.add("is-thrown");
+
+  animationTimer = window.setTimeout(() => {
+    riverShell.classList.remove("is-splashing");
+    objectBlock.classList.remove("is-thrown");
+  }, 980);
 }
 
 function updateSimulation() {
@@ -122,7 +130,11 @@ function updateSimulation() {
 
   let state = "floating";
   let stateLabel = "漂浮";
-  let submergedRatio = clamp(objectDensity / liquidDensity, 0.12, 1);
+  let submergedRatio = clamp(
+    objectDensity / Math.max(liquidDensity, 0.01),
+    0.12,
+    1,
+  );
   let actualBuoyancy = weight;
   let netForce = 0;
 
@@ -141,21 +153,29 @@ function updateSimulation() {
   }
 
   const displacedMass = liquidDensity * volume * submergedRatio;
-  const side = clamp(72 + volume * 10.5, 72, 136);
-  const waterTop = 118;
-  const tankBottom = 478;
+  const side = clamp(70 + volume * 12, 68, 144);
+  const waterTop = 150;
+  const riverBottom = 392;
 
-  let top = waterTop - side * (1 - submergedRatio) - 2;
+  let top = waterTop - side * (1 - submergedRatio) - 6;
+  let left = 53;
+
   if (state === "neutral") {
-    top = waterTop + 122;
-  }
-  if (state === "sinking") {
-    top = tankBottom - side;
+    top = waterTop + 92;
+    left = 52;
   }
 
+  if (state === "sinking") {
+    top = riverBottom - side;
+    left = 51.5;
+  }
+
+  objectBlock.textContent = "试块";
+  objectBlock.dataset.item = "block";
   objectBlock.style.width = `${side}px`;
   objectBlock.style.height = `${side}px`;
   objectBlock.style.top = `${top}px`;
+  objectBlock.style.left = `${left}%`;
   objectBlock.classList.remove("floating", "neutral", "sinking");
   objectBlock.classList.add(state);
 
@@ -166,24 +186,30 @@ function updateSimulation() {
   );
   document.documentElement.style.setProperty("--object-edge", objectColor.edge);
 
-  const waterTintShift = clamp((liquidDensity - 1) / 0.4, -0.6, 1);
-  const waterMidAlpha = clamp(0.6 + waterTintShift * 0.12, 0.52, 0.82);
-  const waterDeepAlpha = clamp(0.78 + waterTintShift * 0.08, 0.7, 0.95);
+  const waterTintShift = clamp((liquidDensity - 1.0) / 0.4, -0.75, 1);
+  const riverTopAlpha = clamp(0.62 + waterTintShift * 0.1, 0.52, 0.82);
+  const riverMidAlpha = clamp(0.78 + waterTintShift * 0.08, 0.66, 0.9);
+  const riverDeepAlpha = clamp(0.9 + waterTintShift * 0.05, 0.82, 0.98);
+  const greenShift = Math.round(180 + waterTintShift * 16);
+  const blueShift = Math.round(210 - waterTintShift * 12);
+
   waterFill.style.background = `linear-gradient(180deg,
-      rgba(170, 233, 242, 0.56) 0%,
-      rgba(74, 177, 213, ${waterMidAlpha}) 48%,
-      rgba(19, 104, 151, ${waterDeepAlpha}) 100%)`;
+      rgba(155, ${greenShift + 40}, ${blueShift + 18}, ${riverTopAlpha}) 0%,
+      rgba(62, 167, ${blueShift}, ${riverMidAlpha}) 48%,
+      rgba(18, 84, 142, ${riverDeepAlpha}) 100%)`;
 
   const referenceForce = Math.max(weight, maxBuoyancy, 1);
-  const buoyancyHeight = 58 + (actualBuoyancy / referenceForce) * 80;
-  const gravityHeight = 58 + (weight / referenceForce) * 80;
+  const buoyancyHeight = 58 + (actualBuoyancy / referenceForce) * 84;
+  const gravityHeight = 58 + (weight / referenceForce) * 84;
   const centerY = top + side / 2;
 
   buoyancyArrow.style.height = `${buoyancyHeight}px`;
   buoyancyArrow.style.top = `${centerY - buoyancyHeight}px`;
+  buoyancyArrow.style.left = `calc(${left}% + ${side / 2 + 28}px)`;
 
   gravityArrow.style.height = `${gravityHeight}px`;
   gravityArrow.style.top = `${centerY}px`;
+  gravityArrow.style.left = `calc(${left}% + ${side / 2 + 28}px)`;
 
   stateBadge.dataset.state = state;
   stateBadge.textContent = stateLabel;
@@ -209,7 +235,7 @@ function updateSimulation() {
   } else if (state === "neutral") {
     summary = "物体与液体密度接近，试块接近悬浮。";
     phenomenon =
-      `物体密度与液体密度非常接近，单位体积所受重力和单位体积可获得的浮力近似相等。` +
+      "物体密度与液体密度非常接近，单位体积所受重力和单位体积可获得的浮力近似相等。" +
       "因此试块会整体浸没在液体中，并在中间区域缓慢稳定下来。";
   } else {
     summary = "物体密度大于液体密度，试块下沉。";
@@ -225,7 +251,6 @@ function updateSimulation() {
 presetButtons.forEach((button) => {
   button.addEventListener("click", () => {
     setPreset(button.dataset.preset);
-    rerunAnimation();
   });
 });
 
@@ -238,4 +263,4 @@ Object.values(controls).forEach((control) => {
 
 rerunButton.addEventListener("click", rerunAnimation);
 
-updateSimulation();
+setPreset("wood-water", { animate: false });
